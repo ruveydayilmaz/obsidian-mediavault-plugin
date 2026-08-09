@@ -1,0 +1,11 @@
+{
+	"id": "mediavault",
+	"name": "MediaVault",
+	"version": "1.0.0",
+	"minAppVersion": "1.13.0",
+	"description": "Track movies, TV shows, reviews, rewatches, and mood-based comfort media, all inside your vault.",
+	"author": "Ruveyda Yilmaz",
+	"isDesktopOnly": false,
+	"authorUrl": "https://github.com/ruveydayilmaz",
+	"fundingUrl": "https://ko-fi.com/ruveyda"
+}
