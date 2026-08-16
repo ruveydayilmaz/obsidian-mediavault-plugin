@@ -1,46 +1,19 @@
-import obsidianPlugin from "eslint-plugin-obsidianmd";
+import tseslint from "typescript-eslint";
+import { defineConfig } from "eslint/config";
+import obsidianmd from "eslint-plugin-obsidianmd";
 
-export default [
-  ...obsidianPlugin.configs.recommended,
-
+export default defineConfig([
+  ...obsidianmd.configs.recommended,
   {
-    files: ["**/*.ts", "**/*.tsx"],
-
+    files: ["**/*.ts"],
     languageOptions: {
-      parserOptions: {
-        projectService: true,
-      },
+      parser: tseslint.parser,
+      parserOptions: { project: "./tsconfig.json" },
     },
 
     rules: {
-      "no-unused-vars": "off",
-
-      "@typescript-eslint/no-unused-vars": [
-        "warn",
-        {
-          args: "none",
-        },
-      ],
-
-      "@typescript-eslint/no-explicit-any": "off",
-      "@typescript-eslint/no-empty-function": "off",
+    //   "obsidianmd/sample-names": "off",
+    //   "obsidianmd/prefer-file-manager-trash": "error",
     },
   },
-
-  {
-    files: ["src/shims/**/*.js"],
-    languageOptions: {
-      sourceType: "commonjs",
-      globals: {
-        module: "writable",
-        globalThis: "readonly",
-        self: "readonly",
-        window: "readonly",
-        document: "readonly",
-        setTimeout: "readonly",
-        MessageChannel: "readonly",
-        MutationObserver: "readonly",
-      },
-    },
-  },
-];
+]);
