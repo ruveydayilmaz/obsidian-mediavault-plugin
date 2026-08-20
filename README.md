@@ -8,7 +8,7 @@ for new releases, mood-based "comfort media" recommendations, and a full
 analytics dashboard. Built for desktop, Android, and iOS, with all data
 stored directly inside your vault.
 
-<img width="1640" height="664" alt="ss" src="https://github.com/user-attachments/assets/81cbadb8-5be0-44be-aeae-d8f582d1ff2b" />
+<img width="1640" height="664" alt="ss" src="https://github.com/user-attachments/assets/c63304a6-bf16-4b2d-a8ca-a9e84aca7e57" />
 
 ## Features
 
