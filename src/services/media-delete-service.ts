@@ -4,6 +4,7 @@ import type { StorageService } from "./storage";
 import { MediaItem } from "../models/media";
 import { MediaType } from "../types/enums";
 import { MediaVaultId } from "../types/common";
+import { removeLocalImageIfAny } from "./local-image-service";
 
 export interface MediaDeletionSummary {
   mediaTitle: string;
@@ -45,6 +46,8 @@ export async function deleteMedia(
   if (media.type === MediaType.Movie) {
     await storage.movieProgress.deleteByMediaId(mediaId);
   }
+  await removeLocalImageIfAny(media.posterPath);
+  await removeLocalImageIfAny(media.backdropPath);
 
   await storage.media.delete(mediaId);
 

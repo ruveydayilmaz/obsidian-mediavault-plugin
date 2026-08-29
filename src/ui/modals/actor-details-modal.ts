@@ -5,12 +5,39 @@ import type { TMDBService } from "../../api/tmdb";
 import { TMDBFilmographyItem, TMDBPersonDetails } from "../../types/tmdb";
 import { MediaType } from "../../types/enums";
 import { tmdbImageUrl } from "../../api/tmdb-normalize";
+import { CREW_ROLE_JOBS } from "../../api/tmdb-normalize";
 import { buildMediaItemFromTMDB } from "../../services/media-import";
 import { MediaDetailModal } from "./media-detail-modal";
 import { t } from "../../i18n";
 import { renderExpandableText } from "../components/expandable-text";
 
 type FilmographyCategory = TMDBFilmographyItem["category"];
+
+export interface ActorDetailsCrewFilter {
+  roles: string[];
+}
+
+const DEPARTMENT_PRIORITY = [
+  "Directing",
+  "Writing",
+  "Production",
+  "Acting",
+  "Camera",
+  "Editing",
+  "Sound",
+  "Art",
+  "Costume & Make-Up",
+  "Visual Effects",
+  "Lighting",
+  "Crew",
+];
+
+function departmentLabel(department: string): string {
+  const key = `detail.department${department.replace(/[^A-Za-z]/g, "")}`;
+  const translated = t(key);
+
+  return translated === key ? department : translated;
+}
 
 function getCategoryTabs(): { id: FilmographyCategory; label: string }[] {
   return [
@@ -20,21 +47,37 @@ function getCategoryTabs(): { id: FilmographyCategory; label: string }[] {
   ];
 }
 
+function crewRoleLabel(role: string): string {
+  switch (role) {
+    case "Director":
+      return t("detail.roleDirector");
+    case "Writer":
+      return t("detail.roleWriter");
+    case "Producer":
+      return t("detail.roleProducer");
+    default:
+      return role;
+  }
+}
+
 export class ActorDetailsModal extends Modal {
   private storage: StorageService;
   private tmdb: TMDBService;
   private personId: number;
+  private crewFilter: ActorDetailsCrewFilter | null;
 
   private person: TMDBPersonDetails | null = null;
   private biographyExpanded = false;
-  private activeTab: FilmographyCategory | null = null;
-  private visibleCountByTab: Record<FilmographyCategory, number> = {
-    tv_series: 30,
-    tv_program: 30,
-    movie: 30,
-  };
+  private activeCategory: FilmographyCategory | null = null;
+  private activeDepartmentByCategory: Partial<
+    Record<FilmographyCategory, string>
+  > = {};
+  private visibleCountByKey: Map<string, number> = new Map();
+  private visibleUpcomingCount = 30;
+  private visiblePreviousCount = 30;
 
-  private tabBarEl!: HTMLElement;
+  private categoryTabBarEl!: HTMLElement;
+  private filmographyHeadingDiv!: HTMLElement;
   private gridEl!: HTMLElement;
 
   constructor(
@@ -42,11 +85,13 @@ export class ActorDetailsModal extends Modal {
     storage: StorageService,
     tmdb: TMDBService,
     personId: number,
+    crewFilter?: ActorDetailsCrewFilter,
   ) {
     super(app);
     this.storage = storage;
     this.tmdb = tmdb;
     this.personId = personId;
+    this.crewFilter = crewFilter ?? null;
   }
 
   async onOpen(): Promise<void> {
@@ -54,7 +99,7 @@ export class ActorDetailsModal extends Modal {
     contentEl.empty();
     contentEl.addClass("mediavault-detail-modal");
     contentEl.addClass("mediavault-actor-modal");
-    const headerRow = renderModalHeader(this, contentEl, "Actor");
+    const headerRow = renderModalHeader(this, contentEl, "Crew Member");
 
     const loading = contentEl.createDiv({
       cls: "mediavault-modal-hint",
@@ -63,7 +108,12 @@ export class ActorDetailsModal extends Modal {
     try {
       this.person = await this.tmdb.getPersonDetails(this.personId);
     } catch (err) {
-      loading.setText(t("detail.couldNotLoadItem", { title: "actor", error: (err as Error).message }));
+      loading.setText(
+        t("detail.couldNotLoadItem", {
+          title: "actor",
+          error: (err as Error).message,
+        }),
+      );
       return;
     }
     loading.remove();
@@ -78,7 +128,7 @@ export class ActorDetailsModal extends Modal {
     if (!this.person) return;
     contentEl
       .querySelectorAll(
-        ".mediavault-actor-header, .mediavault-actor-filmography-heading, .mediavault-detail-tabs, .mediavault-actor-filmography-grid, .mediavault-modal-hint",
+        ".mediavault-actor-header, .mediavault-actor-filmography-heading, .mediavault-detail-tabs, .mediavault-actor-filmography-grid, .mediavault-actor-filmography-groups, .mediavault-modal-hint",
       )
       .forEach((el) => el.remove());
 
@@ -130,6 +180,44 @@ export class ActorDetailsModal extends Modal {
       });
     }
 
+    if (this.person.alsoKnownAs.length > 0) {
+      const akaRow = info.createDiv({
+        cls: "mediavault-actor-original-name",
+      });
+      akaRow.createSpan({
+        cls: "mediavault-actor-original-name-label",
+        text: t("detail.alsoKnownAs"),
+      });
+      akaRow.createSpan({
+        cls: "mediavault-actor-original-name-value",
+        text: this.person.alsoKnownAs.join(", "),
+      });
+    }
+
+    if (this.person.knownForDepartment) {
+      const knownForRow = info.createDiv({
+        cls: "mediavault-actor-original-name",
+      });
+      knownForRow.createSpan({
+        cls: "mediavault-actor-original-name-label",
+        text: t("detail.knownFor"),
+      });
+      knownForRow.createSpan({
+        cls: "mediavault-actor-original-name-value",
+        text: departmentLabel(this.person.knownForDepartment),
+      });
+    }
+
+    if (this.person.imdbId) {
+      const imdbLink = info.createEl("a", {
+        cls: "mediavault-actor-imdb-link",
+        text: t("detail.viewOnImdb"),
+        href: `https://www.imdb.com/name/${this.person.imdbId}/`,
+      });
+      imdbLink.setAttr("target", "_blank");
+      imdbLink.setAttr("rel", "noopener");
+    }
+
     if (this.person.biography) {
       renderExpandableText(
         info,
@@ -148,12 +236,32 @@ export class ActorDetailsModal extends Modal {
       );
     }
 
-    contentEl.createEl("h3", {
-      cls: "mediavault-actor-filmography-heading",
-      text: t("detail.filmography"),
+    if (this.activeCategory === null) {
+      this.activeCategory =
+        getCategoryTabs().find(
+          (tab) => this.creditsForCategory(tab.id).length > 0,
+        )?.id ?? "movie";
+    }
+
+    this.filmographyHeadingDiv = contentEl.createDiv({
+      cls: "mediavault-actor-filmography-heading-div",
     });
 
-    if (this.person.filmography.length === 0) {
+    this.filmographyHeadingDiv.createEl("h3", {
+      cls: "mediavault-actor-filmography-heading",
+      text: this.crewFilter
+        ? this.crewFilter.roles.map((r) => crewRoleLabel(r)).join(" & ")
+        : t("detail.filmography"),
+    });
+
+    this.renderDepartmentTabBar(this.filmographyHeadingDiv);
+
+    if (this.crewFilter) {
+      this.renderCrewFilmography(contentEl, this.crewFilter);
+      return;
+    }
+
+    if (this.person.credits.length === 0) {
       contentEl.createDiv({
         cls: "mediavault-modal-hint",
         text: t("detail.noFilmography"),
@@ -161,57 +269,230 @@ export class ActorDetailsModal extends Modal {
       return;
     }
 
-    this.tabBarEl = contentEl.createDiv({ cls: "mediavault-detail-tabs" });
+    this.categoryTabBarEl = contentEl.createDiv({
+      cls: "mediavault-detail-tabs",
+    });
+
     this.gridEl = contentEl.createDiv({
       cls: "mediavault-actor-filmography-grid",
     });
 
-    if (this.activeTab === null) {
-      this.activeTab =
-        getCategoryTabs().find((tab) => this.itemsForTab(tab.id).length > 0)
-          ?.id ?? "movie";
-    }
-
-    this.renderTabBar();
+    this.renderCategoryTabBar();
     this.renderGrid();
   }
 
-  private itemsForTab(category: FilmographyCategory): TMDBFilmographyItem[] {
+  private renderCrewFilmography(
+    contentEl: HTMLElement,
+    filter: ActorDetailsCrewFilter,
+  ): void {
+    if (!this.person) return;
+    const jobs = new Set(
+      filter.roles.flatMap((role) => CREW_ROLE_JOBS[role] ?? []),
+    );
+    const items = this.person.credits.filter(
+      (item) =>
+        item.department !== "Acting" && item.jobs.some((job) => jobs.has(job)),
+    );
+
+    if (items.length === 0) {
+      contentEl.createDiv({
+        cls: "mediavault-modal-hint",
+        text: t("detail.noFilmography"),
+      });
+      return;
+    }
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const upcoming = items
+      .filter((item) => !!item.releaseDate && item.releaseDate > todayIso)
+      .sort((a, b) => (a.releaseDate ?? "").localeCompare(b.releaseDate ?? ""));
+    const previous = items
+      .filter((item) => !item.releaseDate || item.releaseDate <= todayIso)
+      .sort((a, b) => (b.releaseDate ?? "").localeCompare(a.releaseDate ?? ""));
+
+    const groups = contentEl.createDiv({
+      cls: "mediavault-actor-filmography-groups",
+    });
+
+    if (upcoming.length > 0) {
+      this.renderCrewGroup(
+        groups,
+        t("detail.filmographyUpcoming"),
+        upcoming,
+        "upcoming",
+      );
+    }
+    if (previous.length > 0) {
+      this.renderCrewGroup(
+        groups,
+        t("detail.filmographyPrevious"),
+        previous,
+        "previous",
+      );
+    }
+  }
+
+  private renderCrewGroup(
+    container: HTMLElement,
+    label: string,
+    items: TMDBFilmographyItem[],
+    kind: "upcoming" | "previous",
+  ): void {
+    const section = container.createDiv({
+      cls: "mediavault-actor-filmography-group",
+    });
+    section.createEl("h4", {
+      cls: "mediavault-actor-filmography-group-heading",
+      text: `${label} · ${items.length}`,
+    });
+    const grid = section.createDiv({
+      cls: "mediavault-actor-filmography-grid",
+    });
+    const visibleCount =
+      kind === "upcoming"
+        ? this.visibleUpcomingCount
+        : this.visiblePreviousCount;
+    const page = items.slice(0, visibleCount);
+    page.forEach((item) => this.renderFilmographyCard(grid, item));
+
+    if (items.length > visibleCount) {
+      const moreBtn = grid.createEl("button", {
+        cls: "mediavault-actor-load-more",
+        text: t("detail.loadMoreRemaining", {
+          count: items.length - visibleCount,
+        }),
+      });
+      moreBtn.addEventListener("click", () => {
+        if (kind === "upcoming") this.visibleUpcomingCount += 30;
+        else this.visiblePreviousCount += 30;
+        this.render(this.contentEl);
+      });
+    }
+  }
+
+  private creditsForCategory(
+    category: FilmographyCategory,
+  ): TMDBFilmographyItem[] {
     return (
-      this.person?.filmography.filter((item) => item.category === category) ??
-      []
+      this.person?.credits.filter((item) => item.category === category) ?? []
     );
   }
 
-  private renderTabBar(): void {
-    this.tabBarEl.empty();
+  private departmentsForCategory(category: FilmographyCategory): string[] {
+    const present = new Set(
+      this.creditsForCategory(category).map((item) => item.department),
+    );
+    const known = DEPARTMENT_PRIORITY.filter((d) => present.has(d));
+    const rest = [...present]
+      .filter((d) => !DEPARTMENT_PRIORITY.includes(d))
+      .sort((a, b) => a.localeCompare(b));
+    return [...known, ...rest];
+  }
+
+  private creditsForDepartment(
+    category: FilmographyCategory,
+    department: string,
+  ): TMDBFilmographyItem[] {
+    return this.creditsForCategory(category).filter(
+      (item) => item.department === department,
+    );
+  }
+
+  private renderCategoryTabBar(): void {
+    this.categoryTabBarEl.empty();
+
     getCategoryTabs().forEach((tab) => {
-      const count = this.itemsForTab(tab.id).length;
-      const btn = this.tabBarEl.createEl("button", {
+      const count = this.creditsForCategory(tab.id).length;
+
+      const btn = this.categoryTabBarEl.createEl("button", {
         cls:
           "mediavault-detail-tab" +
-          (this.activeTab === tab.id ? " is-active" : ""),
+          (this.activeCategory === tab.id ? " is-active" : ""),
         text: count > 0 ? `${tab.label} (${count})` : tab.label,
       });
+
       btn.disabled = count === 0;
+
       btn.addEventListener("click", () => {
-        if (this.activeTab === tab.id) return;
-        this.activeTab = tab.id;
-        this.renderTabBar();
+        if (this.activeCategory === tab.id) return;
+
+        this.activeCategory = tab.id;
+
+        this.renderCategoryTabBar();
+        this.renderDepartmentTabBar(this.filmographyHeadingDiv);
         this.renderGrid();
       });
     });
   }
 
-  private renderGrid(): void {
-    this.gridEl.empty();
-    if (!this.activeTab) return;
-    this.renderFilmographyPage(this.itemsForTab(this.activeTab));
+  private activeDepartment(): string | null {
+    if (!this.activeCategory) return null;
+    const departments = this.departmentsForCategory(this.activeCategory);
+    if (departments.length === 0) return null;
+
+    const remembered = this.activeDepartmentByCategory[this.activeCategory];
+    if (remembered && departments.includes(remembered)) return remembered;
+
+    const preferred = this.person?.knownForDepartment;
+    const initial =
+      preferred && departments.includes(preferred) ? preferred : departments[0];
+    this.activeDepartmentByCategory[this.activeCategory] = initial;
+    return initial;
   }
 
-  private renderFilmographyPage(items: TMDBFilmographyItem[]): void {
-    const activeTab = this.activeTab as FilmographyCategory;
-    const visibleCount = this.visibleCountByTab[activeTab];
+  private renderDepartmentTabBar(headingDiv: HTMLElement): void {
+    headingDiv.querySelector(".mediavault-actor-department-select")?.remove();
+
+    if (!this.activeCategory) return;
+
+    const departments = this.departmentsForCategory(this.activeCategory);
+    if (departments.length <= 1) return;
+
+    const current = this.activeDepartment();
+    const activeCategory = this.activeCategory;
+
+    const select = headingDiv.createEl("select", {
+      cls: "mediavault-actor-department-select",
+    });
+
+    departments.forEach((department) => {
+      const count = this.creditsForDepartment(
+        activeCategory,
+        department,
+      ).length;
+
+      select.createEl("option", {
+        value: department,
+        text: `${departmentLabel(department)} (${count})`,
+      });
+    });
+
+    if (current) select.value = current;
+
+    select.addEventListener("change", () => {
+      if (!this.activeCategory) return;
+
+      this.activeDepartmentByCategory[this.activeCategory] = select.value;
+      this.renderGrid();
+    });
+  }
+
+  private renderGrid(): void {
+    this.gridEl.empty();
+    if (!this.activeCategory) return;
+    const department = this.activeDepartment();
+    if (!department) return;
+    this.renderFilmographyPage(
+      this.creditsForDepartment(this.activeCategory, department),
+      `${this.activeCategory}:${department}`,
+    );
+  }
+
+  private renderFilmographyPage(
+    items: TMDBFilmographyItem[],
+    key: string,
+  ): void {
+    const visibleCount = this.visibleCountByKey.get(key) ?? 30;
     const page = items.slice(0, visibleCount);
     page.forEach((item) => this.renderFilmographyCard(this.gridEl, item));
 
@@ -223,7 +504,7 @@ export class ActorDetailsModal extends Modal {
         }),
       });
       moreBtn.addEventListener("click", () => {
-        this.visibleCountByTab[activeTab] += 30;
+        this.visibleCountByKey.set(key, visibleCount + 30);
         this.renderGrid();
       });
     }
@@ -253,9 +534,21 @@ export class ActorDetailsModal extends Modal {
         cls: "mediavault-detail-meta",
         text: t("detail.asCharacter", { character: item.character }),
       });
+    } else if (item.jobs.length > 0) {
+      info.createDiv({
+        cls: "mediavault-detail-meta",
+        text: item.jobs.map((job) => this.jobDisplayLabel(job)).join(" · "),
+      });
     }
 
     card.addEventListener("click", () => void this.openFilmographyItem(item));
+  }
+
+  private jobDisplayLabel(job: string): string {
+    for (const [role, jobs] of Object.entries(CREW_ROLE_JOBS)) {
+      if (jobs.includes(job) && job === role) return crewRoleLabel(role);
+    }
+    return job;
   }
 
   private async openFilmographyItem(item: TMDBFilmographyItem): Promise<void> {

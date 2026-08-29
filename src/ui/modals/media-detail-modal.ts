@@ -50,7 +50,11 @@ import {
   formatRating,
   progressFillClasses,
 } from "../components/media-render";
-import { tmdbImageUrl } from "../../api/tmdb-normalize";
+import { tmdbImageUrl, extractKeyCrew } from "../../api/tmdb-normalize";
+import {
+  resolveMediaImageSrc,
+  removeLocalImageIfAny,
+} from "../../services/local-image-service";
 import { WatchSessionModal } from "./watch-session-modal";
 import { generateMediaNote } from "../../services/note-generator/media-note-generator";
 import { ComfortProfileModal } from "./comfort-profile-modal";
@@ -76,6 +80,22 @@ type DetailTab =
   | "comments"
   | "cast"
   | "episode-detail";
+
+function crewRoleLabel(role: string): string {
+  switch (role) {
+    case "Director":
+      return t("detail.roleDirector");
+    case "Writer":
+      return t("detail.roleWriter");
+    case "Producer":
+      return t("detail.roleProducer");
+    default:
+      return role;
+  }
+}
+
+const CAST_INITIAL_LIMIT = 9;
+const CAST_PAGE_SIZE = 15;
 
 function formatEpisodeRuntime(minutes: number | null): string {
   if (!minutes) return "—";
@@ -109,6 +129,7 @@ export class MediaDetailModal extends Modal {
   private tabBeforeEpisodeDetail: DetailTab = "episodes";
   private episodesScrollTop = 0;
   private TRAKT_COMMENT_LIMIT = 2000;
+  private castLoadMoreObserver: IntersectionObserver | null = null;
 
   constructor(
     app: App,
@@ -216,6 +237,9 @@ export class MediaDetailModal extends Modal {
   private async render(): Promise<void> {
     const { contentEl } = this;
 
+    this.castLoadMoreObserver?.disconnect();
+    this.castLoadMoreObserver = null;
+
     const fresh = await this.storage.media.findById(this.media.id);
     if (fresh) this.media = fresh;
 
@@ -317,9 +341,9 @@ export class MediaDetailModal extends Modal {
   ): Promise<void> {
     const hero = contentEl.createDiv({ cls: "mediavault-detail-hero" });
 
-    const bannerUrl = tmdbImageUrl(
+    const bannerUrl = resolveMediaImageSrc(
       this.media.backdropPath ?? this.media.posterPath,
-      "original",
+      (p) => tmdbImageUrl(p, "original"),
     );
     if (bannerUrl) {
       if (this.heroImgEl && this.heroImgUrl === bannerUrl) {
@@ -744,15 +768,25 @@ export class MediaDetailModal extends Modal {
       imageKind,
       imageKind === "poster" ? this.media.posterPath : this.media.backdropPath,
       async (filePath) => {
+        const previousPath =
+          imageKind === "poster"
+            ? this.media.posterPath
+            : this.media.backdropPath;
         const patch =
           imageKind === "poster"
             ? { posterPath: filePath }
             : { backdropPath: filePath };
         const updated = await this.storage.media.update(this.media.id, patch);
         if (updated) this.media = updated;
+
+        if (previousPath !== filePath) {
+          await removeLocalImageIfAny(previousPath);
+        }
         this.onChanged?.();
         await this.render();
       },
+      this.media.id,
+      this.storage.settings.get().mediaFolderPath || "MediaVault",
     ).open();
   }
 
@@ -1038,10 +1072,63 @@ export class MediaDetailModal extends Modal {
   }
 
   private async renderCastTab(contentEl: HTMLElement): Promise<void> {
+    const mediaKind = this.media.type === MediaType.Movie ? "movie" : "tv";
+
+    const crewSection = contentEl.createDiv({
+      cls: "mediavault-detail-section",
+    });
+    crewSection.createEl("h3", { text: t("detail.directingAndProduction") });
+    const crewLoading = crewSection.createDiv({
+      cls: "mediavault-modal-hint",
+      text: t("detail.loadingCast"),
+    });
+    try {
+      const crew = await this.tmdb.getCrew(this.media.tmdbId, mediaKind);
+      const people = extractKeyCrew(crew);
+      crewLoading.remove();
+      if (people.length === 0) {
+        crewSection.remove();
+      } else {
+        const grid = crewSection.createDiv({ cls: "mediavault-cast-grid" });
+        people.forEach((person) => {
+          const card = grid.createDiv({ cls: "mediavault-cast-card" });
+          const photoUrl = tmdbImageUrl(person.profilePath, "w200");
+          if (photoUrl) {
+            card.createEl("img", {
+              cls: "mediavault-cast-photo",
+              attr: { src: photoUrl, alt: person.name, loading: "lazy" },
+            });
+          } else {
+            card.createDiv({
+              cls: "mediavault-cast-photo mediavault-cast-photo-empty",
+              text: "🎬",
+            });
+          }
+          const info = card.createDiv({ cls: "mediavault-cast-info" });
+          info.createDiv({ cls: "mediavault-cast-name", text: person.name });
+          info.createDiv({
+            cls: "mediavault-detail-meta",
+            text: person.roles.map((role) => crewRoleLabel(role)).join(" · "),
+          });
+
+          card.addEventListener("click", () => {
+            new ActorDetailsModal(
+              this.app,
+              this.storage,
+              this.tmdb,
+              person.tmdbPersonId,
+              { roles: person.roles },
+            ).open();
+          });
+        });
+      }
+    } catch {
+      crewSection.remove();
+    }
+
     const section = contentEl.createDiv({ cls: "mediavault-detail-section" });
     section.createEl("h3", { text: t("detail.cast") });
 
-    const mediaKind = this.media.type === MediaType.Movie ? "movie" : "tv";
     const loading = section.createDiv({
       cls: "mediavault-modal-hint",
       text: t("detail.loadingCast"),
@@ -1065,39 +1152,112 @@ export class MediaDetailModal extends Modal {
       return;
     }
 
+    const sortedCast = [...cast].sort((a, b) => a.order - b.order);
     const grid = section.createDiv({ cls: "mediavault-cast-grid" });
-    [...cast]
-      .sort((a, b) => a.order - b.order)
-      .forEach((member) => {
-        const card = grid.createDiv({ cls: "mediavault-cast-card" });
-        const photoUrl = tmdbImageUrl(member.profilePath, "w200");
-        if (photoUrl) {
-          card.createEl("img", {
-            cls: "mediavault-cast-photo",
-            attr: { src: photoUrl, alt: member.name, loading: "lazy" },
-          });
-        } else {
-          card.createDiv({
-            cls: "mediavault-cast-photo mediavault-cast-photo-empty",
-            text: "🎭",
-          });
-        }
-        const info = card.createDiv({ cls: "mediavault-cast-info" });
-        info.createDiv({ cls: "mediavault-cast-name", text: member.name });
-        info.createDiv({
-          cls: "mediavault-detail-meta",
-          text: member.character,
+    const renderedCastIds = new Set<number>();
+
+    const renderCastCard = (member: (typeof sortedCast)[number]) => {
+      const card = grid.createDiv({ cls: "mediavault-cast-card" });
+      const photoUrl = tmdbImageUrl(member.profilePath, "w200");
+      if (photoUrl) {
+        card.createEl("img", {
+          cls: "mediavault-cast-photo",
+          attr: { src: photoUrl, alt: member.name, loading: "lazy" },
+        });
+      } else {
+        card.createDiv({
+          cls: "mediavault-cast-photo mediavault-cast-photo-empty",
+          text: "🎭",
+        });
+      }
+      const info = card.createDiv({ cls: "mediavault-cast-info" });
+      info.createDiv({ cls: "mediavault-cast-name", text: member.name });
+      info.createDiv({
+        cls: "mediavault-detail-meta",
+        text: member.character,
+      });
+
+      card.addEventListener("click", () => {
+        new ActorDetailsModal(
+          this.app,
+          this.storage,
+          this.tmdb,
+          member.tmdbPersonId,
+        ).open();
+      });
+    };
+
+    sortedCast.slice(0, CAST_INITIAL_LIMIT).forEach((member) => {
+      renderedCastIds.add(member.tmdbPersonId);
+      renderCastCard(member);
+    });
+
+    if (sortedCast.length > CAST_INITIAL_LIMIT) {
+      const footer = section.createDiv({ cls: "mediavault-cast-footer" });
+      const showAllBtn = footer.createEl("button", {
+        cls: "mediavault-actor-load-more",
+        text: t("detail.showAllCast"),
+      });
+
+      showAllBtn.addEventListener("click", () => {
+        showAllBtn.remove();
+
+        const statusEl = footer.createDiv({
+          cls: "mediavault-modal-hint mediavault-cast-status",
+        });
+        const sentinel = footer.createDiv({
+          cls: "mediavault-cast-sentinel",
         });
 
-        card.addEventListener("click", () => {
-          new ActorDetailsModal(
-            this.app,
-            this.storage,
-            this.tmdb,
-            member.tmdbPersonId,
-          ).open();
-        });
+        let isLoadingMore = false;
+
+        const stopObserving = () => {
+          this.castLoadMoreObserver?.disconnect();
+          this.castLoadMoreObserver = null;
+          sentinel.remove();
+        };
+
+        const loadNextBatch = () => {
+          if (isLoadingMore) return;
+          const remaining = sortedCast.filter(
+            (member) => !renderedCastIds.has(member.tmdbPersonId),
+          );
+          if (remaining.length === 0) {
+            statusEl.setText(t("detail.allCastLoaded"));
+            stopObserving();
+            return;
+          }
+          isLoadingMore = true;
+          statusEl.setText(t("detail.loadingMoreCast"));
+
+          const nextBatch = remaining.slice(0, CAST_PAGE_SIZE);
+          nextBatch.forEach((member) => {
+            renderedCastIds.add(member.tmdbPersonId);
+            renderCastCard(member);
+          });
+
+          isLoadingMore = false;
+          if (renderedCastIds.size >= sortedCast.length) {
+            statusEl.setText(t("detail.allCastLoaded"));
+            stopObserving();
+          } else {
+            statusEl.setText("");
+          }
+        };
+
+        this.castLoadMoreObserver = new IntersectionObserver(
+          (entries) => {
+            if (entries.some((entry) => entry.isIntersecting)) {
+              loadNextBatch();
+            }
+          },
+          { root: this.contentEl, rootMargin: "200px" },
+        );
+        this.castLoadMoreObserver.observe(sentinel);
+
+        loadNextBatch();
       });
+    }
   }
 
   private async renderCommentList(
@@ -1977,7 +2137,9 @@ export class MediaDetailModal extends Modal {
 
     const bannerPath =
       episode.thumbnailPath ?? this.media.backdropPath ?? this.media.posterPath;
-    const bannerUrl = tmdbImageUrl(bannerPath, "original");
+    const bannerUrl = resolveMediaImageSrc(bannerPath, (p) =>
+      tmdbImageUrl(p, "original"),
+    );
     if (bannerUrl) {
       hero.createEl("img", {
         cls: "mediavault-detail-banner-img",
@@ -2455,6 +2617,8 @@ export class MediaDetailModal extends Modal {
   }
 
   onClose(): void {
+    this.castLoadMoreObserver?.disconnect();
+    this.castLoadMoreObserver = null;
     this.plugin?.unregisterLocaleAwareModal(this);
     this.contentEl.empty();
   }

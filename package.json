@@ -1,6 +1,6 @@
 {
 	"name": "obsidian-mediavault-plugin",
-	"version": "1.0.5",
+	"version": "1.0.6",
 	"description": "Track movies, TV shows, reviews, rewatches, and mood-based comfort media inside Obsidian.",
 	"main": "main.js",
 	"scripts": {

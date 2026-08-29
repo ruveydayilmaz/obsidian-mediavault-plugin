@@ -31,7 +31,8 @@ import {
 } from "./constants";
 import { StorageService } from "./services/storage";
 import { StatisticsService } from "./services/statistics-service";
-import { TMDBService, tmdbLanguageFor } from "./api/tmdb";
+import { TMDBService, resolveTmdbLanguage } from "./api/tmdb";
+import { initLocalImageService } from "./services/local-image-service";
 import { AddMediaModal } from "./ui/modals/add-media-modal";
 import { LibraryView } from "./ui/views/library-view";
 import { AnalyticsView } from "./ui/views/analytics-view";
@@ -63,7 +64,7 @@ import {
   setupAndroidSafeArea,
   teardownAndroidSafeArea,
 } from "./utils/platform";
-import { i18n, t } from "./i18n";
+import { i18n, t, Locale } from "./i18n";
 
 export default class MediaVaultPlugin extends Plugin {
   storage!: StorageService;
@@ -82,6 +83,7 @@ export default class MediaVaultPlugin extends Plugin {
 
     this.storage = new StorageService(this);
     await this.storage.initialize();
+    initLocalImageService(this.app);
     i18n.setLocale(this.storage.settings.get().language);
     this.unsubscribeLocaleChange = i18n.onChange(() => this.onLocaleChanged());
     this.statistics = new StatisticsService(this.storage);
@@ -93,7 +95,11 @@ export default class MediaVaultPlugin extends Plugin {
       getCacheDurationMinutes: () =>
         this.storage.settings.get().cacheDurationMinutes,
       getShowAdultContent: () => this.storage.settings.get().showAdultContent,
-      getLanguage: () => tmdbLanguageFor(this.storage.settings.get().language),
+      getLanguage: () =>
+        resolveTmdbLanguage(
+          this.storage.settings.get().tmdbLanguage,
+          this.storage.settings.get().language,
+        ),
     });
 
     this.trakt = new TraktService({
@@ -393,7 +399,7 @@ export default class MediaVaultPlugin extends Plugin {
     ).open();
   }
 
-  async setLanguage(language: "en" | "tr"): Promise<void> {
+  async setLanguage(language: Locale): Promise<void> {
     await this.storage.settings.update({ language });
     i18n.setLocale(language);
   }
@@ -702,11 +708,37 @@ export default class MediaVaultPlugin extends Plugin {
     });
 
     if (!settings.notificationSilent) {
-      fired.forEach((n) => new Notice(`MediaVault: ${n.message}`));
+      this.showNotificationToasts(fired);
     }
     if (fired.length > 0) {
       this.refreshLibraryViews();
     }
+  }
+
+  private showNotificationToasts(
+    fired: Awaited<ReturnType<typeof runNotificationCheck>>,
+  ): void {
+    if (fired.length === 0) return;
+
+    if (fired.length === 1) {
+      new Notice(`MediaVault: ${fired[0].message}`);
+      return;
+    }
+
+    const fragment = createFragment((el) => {
+      el.createDiv({ text: `MediaVault: ${fired[0].message}` });
+      const goToBtn = el.createEl("button", {
+        cls: "mediavault-notification-toast-action",
+        text: t("notifications.goToNotifications", {
+          count: fired.length - 1,
+        }),
+      });
+      goToBtn.addEventListener("click", () => {
+        notice.hide();
+        new NotificationHistoryModal(this.app, this).open();
+      });
+    });
+    const notice = new Notice(fragment, 0);
   }
 
   onunload() {

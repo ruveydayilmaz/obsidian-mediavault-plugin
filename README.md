@@ -148,3 +148,5 @@ src/
                          poster cards, discover cards
   settings/           Plugin settings + settings tab
 ```
+
+> **Note:** The translations are currently generated using machine translation, so some phrases may be inaccurate or sound unnatural. If you notice any translation issues, feel free to contribute a correction to the project. All contributions are welcome!

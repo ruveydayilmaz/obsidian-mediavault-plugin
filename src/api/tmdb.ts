@@ -5,6 +5,8 @@ import {
   normalizeMovieDetails,
   normalizeTVDetails,
   normalizeEpisode,
+  normalizePersonSearchResult,
+  parseYearAwareQuery,
   isLatinish as isPersonNameLatinish,
 } from "./tmdb-normalize";
 import {
@@ -24,6 +26,8 @@ import {
   TMDBRawPersonDetails,
   TMDBPersonDetails,
   TMDBFilmographyItem,
+  TMDBRawPersonSearchResponse,
+  TMDBPersonSearchResult,
 } from "../types/tmdb";
 import { PagedResult } from "../types/common";
 
@@ -35,13 +39,32 @@ export interface TMDBServiceConfig {
   getShowAdultContent?: () => boolean;
 }
 
+export interface TMDBSearchOptions {
+  language?: string | null;
+}
+
 const PLUGIN_LOCALE_TO_TMDB_LANGUAGE: Record<string, string> = {
   en: "en-US",
   tr: "tr-TR",
+  it: "it-IT",
+  "zh-CN": "zh-CN",
+  "es-ES": "es-ES",
+  "es-MX": "es-MX",
+  "pt-BR": "pt-BR",
+  "pt-PT": "pt-PT",
+  "ko-KR": "ko-KR",
 };
 
 export function tmdbLanguageFor(pluginLocale: string): string {
   return PLUGIN_LOCALE_TO_TMDB_LANGUAGE[pluginLocale] ?? "en-US";
+}
+
+export function resolveTmdbLanguage(
+  tmdbLanguage: string,
+  pluginLocale: string,
+): string {
+  const trimmed = tmdbLanguage.trim();
+  return trimmed || tmdbLanguageFor(pluginLocale);
 }
 
 export class TMDBService {
@@ -59,6 +82,11 @@ export class TMDBService {
 
   private get language(): string {
     return this.config.getLanguage?.() ?? "en-US";
+  }
+
+  private resolveSearchLanguage(options: TMDBSearchOptions): string | null {
+    if (options.language === null) return null;
+    return options.language ?? this.language;
   }
 
   private get includeAdult(): "true" | "false" {
@@ -81,14 +109,16 @@ export class TMDBService {
     query: string,
     page = 1,
     year: number | null = null,
+    options: TMDBSearchOptions = {},
   ): Promise<PagedResult<TMDBSearchResult>> {
-    const key = `search:movie:${query}:${page}:${year ?? ""}:${this.language}`;
+    const language = this.resolveSearchLanguage(options);
+    const key = `search:movie:${query}:${page}:${year ?? ""}:${language ?? "none"}`;
     return this.cached(key, async () => {
       const raw = await this.http.get<TMDBRawSearchResponse>("/search/movie", {
         params: {
           query,
           page,
-          language: this.language,
+          ...(language ? { language } : {}),
           include_adult: this.includeAdult,
           ...(year !== null ? { primary_release_year: year } : {}),
         },
@@ -106,14 +136,16 @@ export class TMDBService {
     query: string,
     page = 1,
     year: number | null = null,
+    options: TMDBSearchOptions = {},
   ): Promise<PagedResult<TMDBSearchResult>> {
-    const key = `search:tv:${query}:${page}:${year ?? ""}:${this.language}`;
+    const language = this.resolveSearchLanguage(options);
+    const key = `search:tv:${query}:${page}:${year ?? ""}:${language ?? "none"}`;
     return this.cached(key, async () => {
       const raw = await this.http.get<TMDBRawSearchResponse>("/search/tv", {
         params: {
           query,
           page,
-          language: this.language,
+          ...(language ? { language } : {}),
           include_adult: this.includeAdult,
           ...(year !== null ? { first_air_date_year: year } : {}),
         },
@@ -125,6 +157,49 @@ export class TMDBService {
         pageSize: raw.results.length,
       };
     });
+  }
+
+  async searchPeople(
+    query: string,
+    page = 1,
+  ): Promise<PagedResult<TMDBPersonSearchResult>> {
+    const language = this.language;
+    const key = `search:person:${query}:${page}:${language}`;
+    return this.cached(key, async () => {
+      const raw = await this.http.get<TMDBRawPersonSearchResponse>(
+        "/search/person",
+        {
+          params: {
+            query,
+            page,
+            language,
+            include_adult: this.includeAdult,
+          },
+        },
+      );
+      return {
+        items: raw.results.map(normalizePersonSearchResult),
+        total: raw.total_results,
+        page: raw.page,
+        pageSize: raw.results.length,
+      };
+    });
+  }
+
+  async searchMedia(
+    rawQuery: string,
+    kind: "movie" | "tv",
+    page = 1,
+  ): Promise<PagedResult<TMDBSearchResult>> {
+    const searchFn = kind === "movie" ? this.searchMovies.bind(this) : this.searchShows.bind(this);
+    const { query, year } = parseYearAwareQuery(rawQuery);
+
+    if (year === null) return searchFn(query, page, null);
+
+    const withYear = await searchFn(query, page, year);
+    if (withYear.items.length > 0) return withYear;
+
+    return searchFn(rawQuery.trim(), page, null);
   }
 
   async searchMulti(
@@ -159,7 +234,13 @@ export class TMDBService {
       const raw = await this.http.get<TMDBRawMovieDetails>(`/movie/${tmdbId}`, {
         params: { language: this.language, append_to_response: "credits" },
       });
-      return normalizeMovieDetails(raw);
+      const details = normalizeMovieDetails(raw);
+      const localizedPoster = await this.getLocalizedPosterPath(
+        tmdbId,
+        "movie",
+      );
+      if (localizedPoster) details.posterPath = localizedPoster;
+      return details;
     });
   }
 
@@ -169,7 +250,10 @@ export class TMDBService {
       const raw = await this.http.get<TMDBRawTVDetails>(`/tv/${tmdbId}`, {
         params: { language: this.language, append_to_response: "credits" },
       });
-      return normalizeTVDetails(raw);
+      const details = normalizeTVDetails(raw);
+      const localizedPoster = await this.getLocalizedPosterPath(tmdbId, "tv");
+      if (localizedPoster) details.posterPath = localizedPoster;
+      return details;
     });
   }
 
@@ -182,6 +266,15 @@ export class TMDBService {
     return details.cast;
   }
 
+  async getCrew(
+    tmdbId: number,
+    kind: "movie" | "tv",
+  ): Promise<TMDBNormalizedDetails["crew"]> {
+    const details =
+      kind === "movie" ? await this.getMovie(tmdbId) : await this.getTV(tmdbId);
+    return details.crew;
+  }
+
   async getPersonDetails(personId: number): Promise<TMDBPersonDetails> {
     const key = `person:${personId}:${this.language}`;
     return this.cached(key, async () => {
@@ -190,7 +283,7 @@ export class TMDBService {
         {
           params: {
             language: this.language,
-            append_to_response: "combined_credits",
+            append_to_response: "combined_credits,external_ids",
           },
         },
       );
@@ -219,38 +312,91 @@ export class TMDBService {
         }
       }
 
+      const alsoKnownAs = [...new Set(raw.also_known_as ?? [])]
+        .filter((alt) => alt !== displayName && alt !== originalName)
+        .slice(0, 3);
+
       const TV_PROGRAM_GENRE_IDS = new Set([10767, 10764, 99, 10763]);
+
+      const toCategory = (
+        mediaKind: "movie" | "tv",
+        genreIds: number[] | undefined,
+      ): TMDBFilmographyItem["category"] => {
+        const isProgram =
+          mediaKind === "tv" &&
+          (genreIds ?? []).some((g) => TV_PROGRAM_GENRE_IDS.has(g));
+        return mediaKind === "movie"
+          ? "movie"
+          : isProgram
+            ? "tv_program"
+            : "tv_series";
+      };
 
       const filmography = (raw.combined_credits?.cast ?? [])
         .filter((c) => c.media_type === "movie" || c.media_type === "tv")
         .map((c) => {
           const mediaKind = c.media_type as "movie" | "tv";
-          const isProgram =
-            mediaKind === "tv" &&
-            (c.genre_ids ?? []).some((g) => TV_PROGRAM_GENRE_IDS.has(g));
-          const category: TMDBFilmographyItem["category"] =
-            mediaKind === "movie"
-              ? "movie"
-              : isProgram
-                ? "tv_program"
-                : "tv_series";
+          const releaseDate = c.release_date || c.first_air_date || null;
           return {
             tmdbId: c.id,
             mediaKind,
-            category,
+            category: toCategory(mediaKind, c.genre_ids),
             title: c.title ?? c.name ?? "Untitled",
             posterPath: c.poster_path ?? null,
-            year:
-              (c.release_date || c.first_air_date || "").slice(0, 4) || null,
+            year: (releaseDate ?? "").slice(0, 4) || null,
+            releaseDate,
+            department: "Acting",
             character: c.character ?? null,
+            jobs: [] as string[],
             popularity: c.popularity ?? 0,
           };
-        })
-        .sort(
-          (a, b) =>
-            (b.year ?? "").localeCompare(a.year ?? "") ||
-            b.popularity - a.popularity,
-        );
+        });
+
+      const crewByTitleAndDepartment = new Map<string, TMDBFilmographyItem>();
+      for (const c of raw.combined_credits?.crew ?? []) {
+        if (c.media_type !== "movie" && c.media_type !== "tv") continue;
+        if (!c.job || !c.department) continue;
+        const mediaKind = c.media_type;
+        const dedupeKey = `${mediaKind}:${c.id}:${c.department}`;
+        const releaseDate = c.release_date || c.first_air_date || null;
+        const existing = crewByTitleAndDepartment.get(dedupeKey);
+        if (existing) {
+          if (!existing.jobs.includes(c.job)) existing.jobs.push(c.job);
+        } else {
+          crewByTitleAndDepartment.set(dedupeKey, {
+            tmdbId: c.id,
+            mediaKind,
+            category: toCategory(mediaKind, c.genre_ids),
+            title: c.title ?? c.name ?? "Untitled",
+            posterPath: c.poster_path ?? null,
+            year: (releaseDate ?? "").slice(0, 4) || null,
+            releaseDate,
+            department: c.department,
+            character: null,
+            jobs: [c.job],
+            popularity: c.popularity ?? 0,
+          });
+        }
+      }
+
+      const credits = [...filmography, ...crewByTitleAndDepartment.values()].sort(
+        (a, b) =>
+          (b.releaseDate ?? "").localeCompare(a.releaseDate ?? "") ||
+          b.popularity - a.popularity,
+      );
+
+      const knownForByTitle = new Map<string, TMDBFilmographyItem>();
+      for (const credit of credits) {
+        const key = `${credit.mediaKind}:${credit.tmdbId}`;
+        const existing = knownForByTitle.get(key);
+        if (!existing || credit.popularity > existing.popularity) {
+          knownForByTitle.set(key, credit);
+        }
+      }
+      const knownFor = [...knownForByTitle.values()]
+        .sort((a, b) => b.popularity - a.popularity)
+        .slice(0, 12);
+
 
       return {
         tmdbPersonId: raw.id,
@@ -260,8 +406,12 @@ export class TMDBService {
         birthday: raw.birthday ?? null,
         deathday: raw.deathday ?? null,
         placeOfBirth: raw.place_of_birth ?? null,
+        knownForDepartment: raw.known_for_department ?? null,
+        alsoKnownAs,
+        imdbId: raw.external_ids?.imdb_id ?? null,
         biography,
-        filmography,
+        credits,
+        knownFor,
       };
     });
   }
@@ -453,7 +603,7 @@ export class TMDBService {
     tmdbId: number,
     kind: "movie" | "tv",
   ): Promise<TMDBImageOptions> {
-    const key = `images:${kind}:${tmdbId}`;
+    const key = `images:${kind}:${tmdbId}:${this.language}`;
     return this.cached(key, async () => {
       const raw = await this.http.get<TMDBRawImagesResponse>(
         `/${kind}/${tmdbId}/images`,
@@ -470,14 +620,33 @@ export class TMDBService {
           filePath: p.file_path,
           width: p.width,
           height: p.height,
+          languageCode: p.iso_639_1 ?? null,
         })),
         backdrops: [...raw.backdrops].sort(byVoteDesc).map((b) => ({
           filePath: b.file_path,
           width: b.width,
           height: b.height,
+          languageCode: b.iso_639_1 ?? null,
         })),
       };
     });
+  }
+
+  async getLocalizedPosterPath(
+    tmdbId: number,
+    kind: "movie" | "tv",
+  ): Promise<string | null> {
+    if (this.language === "en-US") return null;
+    const languageCode = this.language.split("-")[0];
+    try {
+      const images = await this.getImages(tmdbId, kind);
+      const match = images.posters.find(
+        (p) => p.languageCode === languageCode,
+      );
+      return match?.filePath ?? null;
+    } catch {
+      return null;
+    }
   }
 
   async discover(
