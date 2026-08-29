@@ -12,7 +12,9 @@ import { TraktAuthModal } from "../ui/modals/trakt-auth-modal";
 import { NotificationHistoryModal } from "../ui/modals/notification-history-modal";
 import { disconnectTrakt } from "../services/trakt-token";
 import { i18n, t } from "../i18n";
-import { SUPPORTED_LOCALES } from "../i18n/types";
+import { SUPPORTED_LOCALES, Locale } from "../i18n/types";
+import { TMDB_LANGUAGES } from "../api/tmdb-languages";
+import { resolveTmdbLanguage } from "../api/tmdb";
 import { makeClearable } from "../ui/components/clearable-input";
 import { FactoryResetModal } from "../ui/modals/factory-reset-modal";
 
@@ -82,7 +84,7 @@ export class MediaVaultSettingTab extends PluginSettingTab {
               .addOptions(options)
               .setValue(settings.get().language)
               .onChange(async (value) => {
-                await this.plugin.setLanguage(value as "en" | "tr");
+                await this.plugin.setLanguage(value as Locale);
                 this.update();
               });
           });
@@ -108,6 +110,29 @@ export class MediaVaultSettingTab extends PluginSettingTab {
                 this.plugin.tmdb.clearCache();
               });
             makeClearable(text.inputEl);
+          });
+        },
+      },
+      {
+        name: t("settings.tmdbLanguage"),
+        desc: t("settings.tmdbLanguageDesc"),
+        render: (setting) => {
+          const current =
+            settings.get().tmdbLanguage.trim() ||
+            resolveTmdbLanguage("", settings.get().language);
+          const options: Record<string, string> = {};
+          for (const lang of TMDB_LANGUAGES) {
+            options[lang.code] = `${lang.label} (${lang.code})`;
+          }
+          if (!(current in options)) options[current] = current;
+          setting.addDropdown((dropdown) => {
+            dropdown
+              .addOptions(options)
+              .setValue(current)
+              .onChange(async (value) => {
+                await settings.update({ tmdbLanguage: value });
+                this.plugin.tmdb.clearCache();
+              });
           });
         },
       },

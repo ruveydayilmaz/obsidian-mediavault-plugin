@@ -1,12 +1,15 @@
 import { RatingScale } from "../types/enums";
 import { ListSortMode } from "../models/list";
+import type { Locale } from "../i18n/types";
 
 export type { RatingScale };
 
 export interface MediaVaultSettings {
   dataVersion: number;
 
-  language: "en" | "tr";
+  language: Locale;
+
+  tmdbLanguage: string;
 
   tmdbApiKey: string;
 
@@ -68,6 +71,7 @@ export interface MediaVaultSettings {
 export const DEFAULT_SETTINGS: MediaVaultSettings = {
   dataVersion: 1,
   language: "en",
+  tmdbLanguage: "",
   tmdbApiKey: "",
   traktClientId: "",
   traktClientSecret: "",

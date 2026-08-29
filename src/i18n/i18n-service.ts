@@ -1,5 +1,12 @@
 import en from "./locales/en";
 import tr from "./locales/tr";
+import it from "./locales/it";
+import zhCN from "./locales/zh-CN";
+import esES from "./locales/es-ES";
+import esMX from "./locales/es-MX";
+import ptBR from "./locales/pt-BR";
+import ptPT from "./locales/pt-PT";
+import koKR from "./locales/ko-KR";
 import {
   DEFAULT_LOCALE,
   Locale,
@@ -7,7 +14,41 @@ import {
   TranslationParams,
 } from "./types";
 
-const LOCALES: Record<Locale, TranslationDict> = { en, tr };
+const LOCALES: Record<Locale, TranslationDict> = {
+  en,
+  tr,
+  it,
+  "zh-CN": zhCN,
+  "es-ES": esES,
+  "es-MX": esMX,
+  "pt-BR": ptBR,
+  "pt-PT": ptPT,
+  "ko-KR": koKR,
+};
+
+const LOCALE_INTL_TAG: Record<Locale, string> = {
+  en: "en-US",
+  tr: "tr-TR",
+  it: "it-IT",
+  "zh-CN": "zh-CN",
+  "es-ES": "es-ES",
+  "es-MX": "es-MX",
+  "pt-BR": "pt-BR",
+  "pt-PT": "pt-PT",
+  "ko-KR": "ko-KR",
+};
+
+const LOCALE_RUNTIME_UNITS: Record<Locale, { hour: string; minute: string }> = {
+  en: { hour: "h", minute: "m" },
+  tr: { hour: "s", minute: "dk" },
+  it: { hour: "h", minute: "min" },
+  "zh-CN": { hour: "时", minute: "分" },
+  "es-ES": { hour: "h", minute: "min" },
+  "es-MX": { hour: "h", minute: "min" },
+  "pt-BR": { hour: "h", minute: "min" },
+  "pt-PT": { hour: "h", minute: "min" },
+  "ko-KR": { hour: "시간", minute: "분" },
+};
 
 type Listener = (locale: Locale) => void;
 
@@ -62,7 +103,7 @@ export class I18nService {
   }
 
   private get intlLocale(): string {
-    return this.locale === "tr" ? "tr-TR" : "en-US";
+    return LOCALE_INTL_TAG[this.locale] ?? LOCALE_INTL_TAG[DEFAULT_LOCALE];
   }
 
   formatNumber(n: number, options?: Intl.NumberFormatOptions): string {
@@ -86,8 +127,9 @@ export class I18nService {
   formatRuntime(totalMinutes: number): string {
     const hours = Math.floor(totalMinutes / 60);
     const minutes = Math.round(totalMinutes % 60);
-    const hUnit = this.locale === "tr" ? "s" : "h";
-    const mUnit = this.locale === "tr" ? "dk" : "m";
+    const units = LOCALE_RUNTIME_UNITS[this.locale] ?? LOCALE_RUNTIME_UNITS[DEFAULT_LOCALE];
+    const hUnit = units.hour;
+    const mUnit = units.minute;
     if (hours <= 0) return `${minutes}${mUnit}`;
     if (minutes <= 0) return `${hours}${hUnit}`;
     return `${hours}${hUnit} ${minutes}${mUnit}`;

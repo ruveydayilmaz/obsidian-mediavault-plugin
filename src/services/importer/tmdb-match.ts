@@ -158,7 +158,7 @@ async function gatherCandidates(
     queriesTried.push(year !== null ? `${trimmed} (${year})` : trimmed);
 
     try {
-      const result = await searchFn(trimmed, 1, year);
+      const result = await searchFn(trimmed, 1, year, { language: null });
       for (const item of result.items) pool.set(item.tmdbId, item);
     } catch {
       // Ignore

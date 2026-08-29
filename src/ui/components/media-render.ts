@@ -1,6 +1,7 @@
 import { MediaItem } from "../../models/media";
 import { MediaStatus, MediaType } from "../../types/enums";
 import { tmdbImageUrl } from "../../api/tmdb-normalize";
+import { resolveMediaImageSrc } from "../../services/local-image-service";
 import type { StorageService } from "../../services/storage";
 import { t } from "../../i18n";
 
@@ -53,7 +54,9 @@ export function renderPoster(
   item: MediaItem,
   size: "w200" | "w342" = "w200",
 ): void {
-  const posterUrl = tmdbImageUrl(item.posterPath, size);
+  const posterUrl = resolveMediaImageSrc(item.posterPath, (p) =>
+    tmdbImageUrl(p, size),
+  );
   if (posterUrl) {
     container.createEl("img", {
       attr: { src: posterUrl, alt: item.title, loading: "lazy" },

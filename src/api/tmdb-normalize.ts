@@ -7,6 +7,8 @@ import {
   TMDBNormalizedDetails,
   TMDBNormalizedEpisode,
   TMDBMediaKind,
+  TMDBRawPersonSearchItem,
+  TMDBPersonSearchResult,
 } from "../types/tmdb";
 import { TMDB_IMAGE_BASE } from "./tmdb-http-client";
 
@@ -207,8 +209,100 @@ export function normalizeEpisode(raw: TMDBRawEpisode): TMDBNormalizedEpisode {
   };
 }
 
+export const CREW_ROLE_JOBS: Record<string, string[]> = {
+  Director: ["Director"],
+  Writer: [
+    "Writer",
+    "Screenplay",
+    "Story",
+    "Teleplay",
+    "Original Film Writer",
+    "Novel",
+  ],
+  Producer: [
+    "Producer",
+    "Executive Producer",
+    "Co-Producer",
+    "Co-Executive Producer",
+    "Line Producer",
+    "Associate Producer",
+    "Consulting Producer",
+  ],
+};
+
+function canonicalCrewRole(job: string): string | null {
+  for (const [role, jobs] of Object.entries(CREW_ROLE_JOBS)) {
+    if (jobs.includes(job)) return role;
+  }
+  return null;
+}
+
+export function extractKeyCrew(
+  crew: { tmdbPersonId: number; name: string; profilePath: string | null; job: string }[],
+): { tmdbPersonId: number; name: string; profilePath: string | null; roles: string[] }[] {
+  const byPerson = new Map<
+    number,
+    { tmdbPersonId: number; name: string; profilePath: string | null; roles: string[] }
+  >();
+
+  for (const member of crew) {
+    const role = canonicalCrewRole(member.job);
+    if (!role) continue;
+    const existing = byPerson.get(member.tmdbPersonId);
+    if (existing) {
+      if (!existing.roles.includes(role)) existing.roles.push(role);
+    } else {
+      byPerson.set(member.tmdbPersonId, {
+        tmdbPersonId: member.tmdbPersonId,
+        name: member.name,
+        profilePath: member.profilePath,
+        roles: [role],
+      });
+    }
+  }
+
+  const ROLE_ORDER = ["Director", "Writer", "Producer"];
+  return [...byPerson.values()].sort((a, b) => {
+    const aRank = Math.min(...a.roles.map((r) => ROLE_ORDER.indexOf(r)));
+    const bRank = Math.min(...b.roles.map((r) => ROLE_ORDER.indexOf(r)));
+    if (aRank !== bRank) return aRank - bRank;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 function extractYear(dateStr: string | null | undefined): number | null {
   if (!dateStr) return null;
   const year = parseInt(dateStr.slice(0, 4), 10);
   return isNaN(year) ? null : year;
+}
+
+const YEAR_MIN = 1900;
+const YEAR_MAX = 2099;
+
+export function parseYearAwareQuery(rawQuery: string): {
+  query: string;
+  year: number | null;
+} {
+  const trimmed = rawQuery.trim();
+  const match = /^(.*\S)\s+(\d{4})$/u.exec(trimmed);
+  if (!match) return { query: trimmed, year: null };
+
+  const year = parseInt(match[2], 10);
+  if (year < YEAR_MIN || year > YEAR_MAX) {
+    return { query: trimmed, year: null };
+  }
+
+  return { query: match[1], year };
+}
+
+export function normalizePersonSearchResult(
+  raw: TMDBRawPersonSearchItem,
+): TMDBPersonSearchResult {
+  return {
+    tmdbPersonId: raw.id,
+    name: raw.name,
+    profilePath: raw.profile_path,
+    knownForDepartment: raw.known_for_department ?? null,
+    popularity: raw.popularity ?? 0,
+  };
 }

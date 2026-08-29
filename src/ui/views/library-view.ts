@@ -33,6 +33,7 @@ import { renderFavoritesSection } from "../components/favorites-carousel";
 import { renderCustomListsCarousel } from "../components/custom-lists-carousel";
 import { ListDetailModal } from "../modals/list-detail-modal";
 import { tmdbImageUrl } from "../../api/tmdb-normalize";
+import { resolveMediaImageSrc } from "../../services/local-image-service";
 import { getSystemFavoriteLists } from "../../services/list-service";
 import { isAndroidDevice } from "../../utils/platform";
 import { makeClearable } from "../components/clearable-input";
@@ -694,9 +695,9 @@ export class LibraryView extends ItemView {
         (m) => m.genres.includes(genre) && (m.backdropPath || m.posterPath),
       );
       if (!source) continue;
-      const url = tmdbImageUrl(
+      const url = resolveMediaImageSrc(
         source.backdropPath ?? source.posterPath,
-        "w500",
+        (p) => tmdbImageUrl(p, "w500"),
       );
       if (!url) continue;
       const key = this.genreCacheKey(genre, all);

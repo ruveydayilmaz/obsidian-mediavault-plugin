@@ -1,7 +1,7 @@
 import { ItemView, WorkspaceLeaf, setIcon } from "obsidian";
 import type MediaVaultPlugin from "../../main";
 import { VIEW_TYPE_EXPLORE } from "../../constants";
-import { TMDBSearchResult } from "../../types/tmdb";
+import { TMDBSearchResult, TMDBPersonSearchResult } from "../../types/tmdb";
 import {
   buildRecommendations,
   RecommendationSet,
@@ -10,10 +10,12 @@ import { Recommendation } from "../../services/recommendation/types";
 import { DiscoverFilters } from "../../api/tmdb";
 import { MediaType } from "../../types/enums";
 import { renderDiscoverCard } from "../components/discover-card";
+import { renderPersonCard } from "../components/person-card";
 import { t } from "../../i18n";
 import { makeClearable } from "../components/clearable-input";
 
 type ExploreTab = "discover" | "browse" | "search";
+type SearchCategory = "all" | "movie" | "tv" | "person";
 
 interface ExploreCardData {
   tmdbId: number;
@@ -22,6 +24,24 @@ interface ExploreCardData {
   year: number | null;
   posterPath: string | null;
   reason?: string;
+}
+
+interface MediaSearchState {
+  query: string;
+  items: TMDBSearchResult[];
+  page: number;
+  hasMore: boolean;
+  isLoadingMore: boolean;
+  generation: number;
+}
+
+interface PersonSearchState {
+  query: string;
+  items: TMDBPersonSearchResult[];
+  page: number;
+  hasMore: boolean;
+  isLoadingMore: boolean;
+  generation: number;
 }
 
 export class ExploreView extends ItemView {
@@ -37,6 +57,13 @@ export class ExploreView extends ItemView {
 
   private searchQuery = "";
   private searchDebounce: number | null = null;
+  private searchCategory: SearchCategory = "all";
+
+  private movieSearchState: MediaSearchState | null = null;
+  private tvSearchState: MediaSearchState | null = null;
+  private personSearchState: PersonSearchState | null = null;
+
+  private searchGeneration = 0;
 
   constructor(leaf: WorkspaceLeaf, plugin: MediaVaultPlugin) {
     super(leaf);
@@ -394,10 +421,37 @@ export class ExploreView extends ItemView {
     });
     input.value = this.searchQuery;
     makeClearable(input);
+
+    const categoryBar = body.createDiv({ cls: "mediavault-detail-tabs" });
     const resultsEl = body.createDiv({ cls: "mediavault-explore-results" });
 
+    const categories: { id: SearchCategory; label: string }[] = [
+      { id: "all", label: t("explore.searchAll") },
+      { id: "movie", label: t("explore.filterMovies") },
+      { id: "tv", label: t("explore.filterTvShows") },
+      { id: "person", label: t("explore.searchPeople") },
+    ];
+    const renderCategoryBar = (): void => {
+      categoryBar.empty();
+      categories.forEach((cat) => {
+        const btn = categoryBar.createEl("button", {
+          cls:
+            "mediavault-detail-tab" +
+            (this.searchCategory === cat.id ? " is-active" : ""),
+          text: cat.label,
+        });
+        btn.addEventListener("click", () => {
+          if (this.searchCategory === cat.id) return;
+          this.searchCategory = cat.id;
+          renderCategoryBar();
+          void this.renderSearchResults(resultsEl);
+        });
+      });
+    };
+    renderCategoryBar();
+
     if (this.searchQuery) {
-      await this.runSearch(this.searchQuery, resultsEl);
+      await this.renderSearchResults(resultsEl);
     } else {
       resultsEl.createEl("p", {
         cls: "mediavault-empty-state",
@@ -407,18 +461,20 @@ export class ExploreView extends ItemView {
 
     input.addEventListener("input", () => {
       this.searchQuery = input.value;
+
+      this.movieSearchState = null;
+      this.tvSearchState = null;
+      this.personSearchState = null;
       if (this.searchDebounce) window.clearTimeout(this.searchDebounce);
       this.searchDebounce = window.setTimeout(
-        () => void this.runSearch(this.searchQuery, resultsEl),
+        () => void this.renderSearchResults(resultsEl),
         350,
       );
     });
   }
 
-  private async runSearch(
-    query: string,
-    resultsEl: HTMLElement,
-  ): Promise<void> {
+  private async renderSearchResults(resultsEl: HTMLElement): Promise<void> {
+    const query = this.searchQuery;
     resultsEl.empty();
     if (query.trim().length < 2) {
       resultsEl.createEl("p", {
@@ -427,26 +483,333 @@ export class ExploreView extends ItemView {
       });
       return;
     }
+
+    const category = this.searchCategory;
+
+    if (category === "movie" && this.movieSearchState?.query === query) {
+      this.renderCachedMediaResults(resultsEl, "movie", this.movieSearchState);
+      return;
+    }
+    if (category === "tv" && this.tvSearchState?.query === query) {
+      this.renderCachedMediaResults(resultsEl, "tv", this.tvSearchState);
+      return;
+    }
+    if (category === "person" && this.personSearchState?.query === query) {
+      this.renderCachedPersonResults(resultsEl, this.personSearchState);
+      return;
+    }
+
     const loading = resultsEl.createEl("p", {
       cls: "mediavault-empty-state",
       text: t("explore.searching"),
     });
+
     try {
-      const result = await this.plugin.tmdb.searchMulti(query);
+      if (category === "person") {
+        const result = await this.plugin.tmdb.searchPeople(query, 1);
+        if (query !== this.searchQuery || this.searchCategory !== category) {
+          return;
+        }
+        loading.remove();
+        this.personSearchState = {
+          query,
+          items: dedupeById(result.items, (p) => String(p.tmdbPersonId)),
+          page: 1,
+          hasMore: hasMorePages(result),
+          isLoadingMore: false,
+          generation: ++this.searchGeneration,
+        };
+        if (this.personSearchState.items.length === 0) {
+          resultsEl.createEl("p", {
+            cls: "mediavault-empty-state",
+            text: t("explore.noPeopleFound"),
+          });
+          return;
+        }
+        this.renderCachedPersonResults(resultsEl, this.personSearchState);
+        return;
+      }
+
+      if (category === "movie" || category === "tv") {
+        const result = await this.plugin.tmdb.searchMedia(query, category, 1);
+        if (query !== this.searchQuery || this.searchCategory !== category) {
+          return;
+        }
+        loading.remove();
+        const state: MediaSearchState = {
+          query,
+          items: dedupeById(result.items, (m) => `${m.mediaKind}:${m.tmdbId}`),
+          page: 1,
+          hasMore: hasMorePages(result),
+          isLoadingMore: false,
+          generation: ++this.searchGeneration,
+        };
+        if (category === "movie") this.movieSearchState = state;
+        else this.tvSearchState = state;
+
+        if (state.items.length === 0) {
+          resultsEl.createEl("p", {
+            cls: "mediavault-empty-state",
+            text: t("explore.noResults"),
+          });
+          return;
+        }
+        this.renderCachedMediaResults(resultsEl, category, state);
+        return;
+      }
+
+      const [movies, tv, people] = await Promise.all([
+        this.plugin.tmdb.searchMedia(query, "movie", 1),
+        this.plugin.tmdb.searchMedia(query, "tv", 1),
+        this.plugin.tmdb.searchPeople(query, 1),
+      ]);
+      if (query !== this.searchQuery || this.searchCategory !== category) {
+        return;
+      }
       loading.remove();
-      if (result.items.length === 0) {
+
+      if (
+        movies.items.length === 0 &&
+        tv.items.length === 0 &&
+        people.items.length === 0
+      ) {
         resultsEl.createEl("p", {
           cls: "mediavault-empty-state",
           text: t("explore.noResults"),
         });
         return;
       }
-      this.renderGrid(resultsEl, result.items.map(fromSearchResult));
+
+      const mediaCards = [...movies.items, ...tv.items].map(fromSearchResult);
+      if (mediaCards.length > 0) this.renderGrid(resultsEl, mediaCards);
+      if (people.items.length > 0) {
+        resultsEl.createEl("h3", { text: t("explore.searchPeople") });
+        const peopleGrid = resultsEl.createDiv({ cls: "mediavault-grid" });
+        people.items.forEach((person) =>
+          renderPersonCard(
+            peopleGrid,
+            { app: this.app, storage: this.plugin.storage, tmdb: this.plugin.tmdb },
+            person,
+          ),
+        );
+      }
     } catch (err) {
       loading.setText(
         t("explore.searchFailed", { error: (err as Error).message }),
       );
     }
+  }
+
+  private renderCachedMediaResults(
+    resultsEl: HTMLElement,
+    category: "movie" | "tv",
+    state: MediaSearchState,
+  ): void {
+    resultsEl.empty();
+    const grid = resultsEl.createDiv({ cls: "mediavault-grid" });
+    state.items.forEach((item) =>
+      this.renderCard(grid, fromSearchResult(item)),
+    );
+    this.renderLoadMoreControl(resultsEl, grid, () =>
+        void this.loadMoreMedia(category, resultsEl, grid),
+      state,
+    );
+  }
+
+  private renderCachedPersonResults(
+    resultsEl: HTMLElement,
+    state: PersonSearchState,
+  ): void {
+    resultsEl.empty();
+    const grid = resultsEl.createDiv({ cls: "mediavault-grid" });
+    state.items.forEach((person) =>
+      renderPersonCard(
+        grid,
+        { app: this.app, storage: this.plugin.storage, tmdb: this.plugin.tmdb },
+        person,
+      ),
+    );
+    this.renderLoadMoreControl(
+      resultsEl,
+      grid,
+      () => void this.loadMorePeople(resultsEl, grid),
+      state,
+    );
+  }
+
+  private renderLoadMoreControl(
+    resultsEl: HTMLElement,
+    grid: HTMLElement,
+    onLoadMore: () => void,
+    state: { hasMore: boolean; isLoadingMore: boolean },
+  ): void {
+    resultsEl
+      .querySelectorAll(".mediavault-explore-load-more-row")
+      .forEach((el) => el.remove());
+    if (!state.hasMore) return;
+
+    const row = resultsEl.createDiv({
+      cls: "mediavault-explore-load-more-row",
+    });
+    if (state.isLoadingMore) {
+      row.createEl("p", {
+        cls: "mediavault-empty-state",
+        text: t("explore.loadingMore"),
+      });
+      return;
+    }
+    const moreBtn = row.createEl("button", {
+      cls: "mediavault-actor-load-more",
+      text: t("explore.loadMore"),
+    });
+    moreBtn.addEventListener("click", onLoadMore);
+  }
+
+  private async loadMoreMedia(
+    category: "movie" | "tv",
+    resultsEl: HTMLElement,
+    grid: HTMLElement,
+  ): Promise<void> {
+    const state =
+      category === "movie" ? this.movieSearchState : this.tvSearchState;
+    if (!state || state.isLoadingMore || !state.hasMore) return;
+    const generation = state.generation;
+    state.isLoadingMore = true;
+    this.renderLoadMoreControl(
+      resultsEl,
+      grid,
+      () => void this.loadMoreMedia(category, resultsEl, grid),
+      state,
+    );
+
+    try {
+      const nextPage = state.page + 1;
+      const result = await this.plugin.tmdb.searchMedia(
+        state.query,
+        category,
+        nextPage,
+      );
+      const current =
+        category === "movie" ? this.movieSearchState : this.tvSearchState;
+
+      if (!current || current.generation !== generation) return;
+
+      const existingIds = new Set(
+        current.items.map((m) => `${m.mediaKind}:${m.tmdbId}`),
+      );
+      const newItems = result.items.filter(
+        (m) => !existingIds.has(`${m.mediaKind}:${m.tmdbId}`),
+      );
+      current.items = [...current.items, ...newItems];
+      current.page = nextPage;
+      current.hasMore = hasMorePages(result);
+      current.isLoadingMore = false;
+
+      newItems.forEach((item) => this.renderCard(grid, fromSearchResult(item)));
+      this.renderLoadMoreControl(
+        resultsEl,
+        grid,
+        () => void this.loadMoreMedia(category, resultsEl, grid),
+        current,
+      );
+    } catch (err) {
+      const current =
+        category === "movie" ? this.movieSearchState : this.tvSearchState;
+      if (!current || current.generation !== generation) return;
+      current.isLoadingMore = false;
+      this.renderLoadMoreControl(
+        resultsEl,
+        grid,
+        () => void this.loadMoreMedia(category, resultsEl, grid),
+        current,
+      );
+      resultsEl.createEl("p", {
+        cls: "mediavault-empty-state",
+        text: t("explore.searchFailed", { error: (err as Error).message }),
+      });
+    }
+  }
+
+  private async loadMorePeople(
+    resultsEl: HTMLElement,
+    grid: HTMLElement,
+  ): Promise<void> {
+    const state = this.personSearchState;
+    if (!state || state.isLoadingMore || !state.hasMore) return;
+    const generation = state.generation;
+    state.isLoadingMore = true;
+    this.renderLoadMoreControl(
+      resultsEl,
+      grid,
+      () => void this.loadMorePeople(resultsEl, grid),
+      state,
+    );
+
+    try {
+      const nextPage = state.page + 1;
+      const result = await this.plugin.tmdb.searchPeople(
+        state.query,
+        nextPage,
+      );
+      const current = this.personSearchState;
+      if (!current || current.generation !== generation) return;
+
+      const existingIds = new Set(current.items.map((p) => p.tmdbPersonId));
+      const newItems = result.items.filter(
+        (p) => !existingIds.has(p.tmdbPersonId),
+      );
+      current.items = [...current.items, ...newItems];
+      current.page = nextPage;
+      current.hasMore = hasMorePages(result);
+      current.isLoadingMore = false;
+
+      newItems.forEach((person) =>
+        renderPersonCard(
+          grid,
+          { app: this.app, storage: this.plugin.storage, tmdb: this.plugin.tmdb },
+          person,
+        ),
+      );
+      this.renderLoadMoreControl(
+        resultsEl,
+        grid,
+        () => void this.loadMorePeople(resultsEl, grid),
+        current,
+      );
+    } catch (err) {
+      const current = this.personSearchState;
+      if (!current || current.generation !== generation) return;
+      current.isLoadingMore = false;
+      this.renderLoadMoreControl(
+        resultsEl,
+        grid,
+        () => void this.loadMorePeople(resultsEl, grid),
+        current,
+      );
+      resultsEl.createEl("p", {
+        cls: "mediavault-empty-state",
+        text: t("explore.searchFailed", { error: (err as Error).message }),
+      });
+    }
+  }
+
+  private renderCard(container: HTMLElement, card: ExploreCardData): void {
+    renderDiscoverCard(
+      container,
+      {
+        app: this.app,
+        storage: this.plugin.storage,
+        tmdb: this.plugin.tmdb,
+        plugin: this.plugin,
+        layout: "grid",
+        isOwned: (c) => this.ownedKeys.has(`${c.mediaKind}:${c.tmdbId}`),
+        onAdded: (c) => {
+          this.plugin.refreshLibraryViews();
+          this.ownedKeys.add(`${c.mediaKind}:${c.tmdbId}`);
+        },
+      },
+      card,
+    );
   }
 
   private renderRow(
@@ -497,6 +860,27 @@ export class ExploreView extends ItemView {
       ),
     );
   }
+}
+
+function hasMorePages(result: {
+  total: number;
+  page: number;
+  pageSize: number;
+}): boolean {
+  if (result.pageSize === 0) return false;
+  return result.page * result.pageSize < result.total;
+}
+
+function dedupeById<T>(items: T[], keyOf: (item: T) => string): T[] {
+  const seen = new Set<string>();
+  const result: T[] = [];
+  for (const item of items) {
+    const key = keyOf(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(item);
+  }
+  return result;
 }
 
 function fromSearchResult(item: TMDBSearchResult): ExploreCardData {

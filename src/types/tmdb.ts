@@ -19,6 +19,29 @@ export interface TMDBRawSearchResultItem {
   popularity?: number;
 }
 
+export interface TMDBRawPersonSearchItem {
+  id: number;
+  name: string;
+  profile_path: string | null;
+  known_for_department?: string | null;
+  popularity?: number;
+}
+
+export interface TMDBRawPersonSearchResponse {
+  page: number;
+  total_pages: number;
+  total_results: number;
+  results: TMDBRawPersonSearchItem[];
+}
+
+export interface TMDBPersonSearchResult {
+  tmdbPersonId: number;
+  name: string;
+  profilePath: string | null;
+  knownForDepartment: string | null;
+  popularity: number;
+}
+
 export interface TMDBRawSearchResponse {
   page: number;
   total_pages: number;
@@ -216,6 +239,7 @@ export interface TMDBImageOption {
   filePath: string;
   width: number;
   height: number;
+  languageCode?: string | null;
 }
 
 export interface TMDBImageOptions {
@@ -232,6 +256,8 @@ export interface TMDBRawCombinedCreditItem {
   release_date?: string;
   first_air_date?: string;
   character?: string;
+  job?: string;
+  department?: string;
   popularity?: number;
   genre_ids?: number[];
 }
@@ -245,8 +271,13 @@ export interface TMDBRawPersonDetails {
   deathday?: string | null;
   place_of_birth?: string | null;
   also_known_as?: string[];
+  known_for_department?: string | null;
   combined_credits?: {
     cast?: TMDBRawCombinedCreditItem[];
+    crew?: TMDBRawCombinedCreditItem[];
+  };
+  external_ids?: {
+    imdb_id?: string | null;
   };
 }
 
@@ -257,7 +288,10 @@ export interface TMDBFilmographyItem {
   title: string;
   posterPath: string | null;
   year: string | null;
+  releaseDate: string | null;
+  department: string;
   character: string | null;
+  jobs: string[];
   popularity: number;
 }
 
@@ -270,5 +304,10 @@ export interface TMDBPersonDetails {
   birthday: string | null;
   deathday: string | null;
   placeOfBirth: string | null;
-  filmography: TMDBFilmographyItem[];
+  knownForDepartment: string | null;
+  alsoKnownAs: string[];
+  imdbId: string | null;
+  credits: TMDBFilmographyItem[];
+  knownFor: TMDBFilmographyItem[];
 }
+

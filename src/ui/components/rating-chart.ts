@@ -87,11 +87,11 @@ export function renderRatingEvolutionChart(
     watchLabel.setAttribute("text-anchor", "middle");
     watchLabel.setAttribute("class", "mediavault-chart-watch-label");
     watchLabel.textContent =
-      i18n.getLocale() === "tr"
-        ? `${p.rewatchNumber + 1}.`
-        : p.rewatchNumber === 0
+      i18n.getLocale() === "en"
+        ? p.rewatchNumber === 0
           ? "1st"
-          : ordinal(p.rewatchNumber + 1);
+          : ordinal(p.rewatchNumber + 1)
+        : `${p.rewatchNumber + 1}.`;
     svg.appendChild(watchLabel);
   });
 
