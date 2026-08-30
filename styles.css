@@ -404,6 +404,7 @@
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -3773,8 +3774,7 @@ body.mediavault-android .mediavault-explore-filter-bar select {
   grid-template-areas:
     "photo info"
     "photo bio";
-  column-gap: 16px;
-  row-gap: 4px;
+  gap: 4px 16px;
   padding: var(--p-spacing);
   align-items: start;
 }
