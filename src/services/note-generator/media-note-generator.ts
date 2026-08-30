@@ -4,6 +4,8 @@ import { MediaItem } from "../../models/media";
 import { MediaType } from "../../types/enums";
 import { buildMediaFrontmatter } from "./media-frontmatter";
 import { buildManagedBody, mergeManagedBody } from "./note-content";
+import { mapWithConcurrency } from "../importer/concurrency";
+import { maybeYield } from "../importer/yield";
 
 function sanitizeFilename(name: string): string {
   return name.replace(/[/\\:*?"<>|]/g, "-").trim();
@@ -88,4 +90,60 @@ function stripLeadingFrontmatter(content: string): string {
   if (closingIdx === -1) return content;
   const afterFrontmatter = content.indexOf("\n", closingIdx + 4);
   return afterFrontmatter === -1 ? "" : content.slice(afterFrontmatter + 1);
+}
+
+const NOTE_GENERATION_CONCURRENCY = 4;
+const NOTE_GENERATION_YIELD_EVERY = 5;
+const PROGRESS_THROTTLE_MS = 100;
+
+export type NoteGenerationProgressCallback = (
+  done: number,
+  total: number,
+) => void;
+
+export interface NoteGenerationResult {
+  succeeded: number;
+  failed: number;
+  total: number;
+}
+
+export async function generateNotesInBatches(
+  app: App,
+  storage: StorageService,
+  mediaItems: MediaItem[],
+  onProgress?: NoteGenerationProgressCallback,
+): Promise<NoteGenerationResult> {
+  const total = mediaItems.length;
+  let done = 0;
+  let succeeded = 0;
+  let lastProgressAt = 0;
+
+  await mapWithConcurrency(
+    mediaItems,
+    NOTE_GENERATION_CONCURRENCY,
+    async (media) => {
+      try {
+        await generateMediaNote(app, storage, media);
+        succeeded++;
+      } catch (err) {
+        console.warn(
+          `MediaVault: failed to generate note for "${media.title}"`,
+          err,
+        );
+      }
+
+      done++;
+      const now = Date.now();
+      if (
+        onProgress &&
+        (done === total || now - lastProgressAt >= PROGRESS_THROTTLE_MS)
+      ) {
+        lastProgressAt = now;
+        onProgress(done, total);
+      }
+      await maybeYield(done, NOTE_GENERATION_YIELD_EVERY);
+    },
+  );
+
+  return { succeeded, failed: total - succeeded, total };
 }

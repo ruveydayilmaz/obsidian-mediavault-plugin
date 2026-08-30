@@ -52,7 +52,7 @@ export class AddMediaModal extends SuggestModal<TMDBSearchResult> {
           const queryAtFire = this.latestQuery;
 
           try {
-            const result = await this.tmdb.searchMulti(queryAtFire);
+            const result = await this.tmdb.searchMediaMulti(queryAtFire);
 
             if (queryAtFire === this.latestQuery) {
               this.latestResults = result.items;

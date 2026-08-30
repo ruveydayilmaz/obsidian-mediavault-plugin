@@ -564,6 +564,7 @@ const it: TranslationDict = {
     noteUpdated: "Nota aggiornata: {path}",
     noteGenerationFailed: "Generazione nota non riuscita: {error}",
     regeneratingNotes: "Rigenerazione di {count} nota/e...",
+    regeneratingNotesProgress: "Generazione note... {done} / {total}",
     regeneratedNotes: "Rigenerate {count}/{total} nota/e.",
     noMatchingTvShows: "Ancora nessuna serie TV corrispondente nella tua libreria.",
     libraryEmpty: "La tua libreria è vuota. Aggiungi prima qualcosa.",

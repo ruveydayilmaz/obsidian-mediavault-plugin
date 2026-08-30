@@ -564,6 +564,7 @@ const zhCN: TranslationDict = {
     noteUpdated: "笔记已更新：{path}",
     noteGenerationFailed: "生成笔记失败：{error}",
     regeneratingNotes: "正在重新生成 {count} 篇笔记…",
+    regeneratingNotesProgress: "正在生成笔记… {done} / {total}",
     regeneratedNotes: "已重新生成 {count}/{total} 篇笔记。",
     noMatchingTvShows: "你的媒体库中暂无匹配的电视剧。",
     libraryEmpty: "你的媒体库为空，请先添加一些内容。",
