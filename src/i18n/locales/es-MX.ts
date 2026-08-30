@@ -564,6 +564,7 @@ const esMX: TranslationDict = {
     noteUpdated: "Nota actualizada: {path}",
     noteGenerationFailed: "No se pudo generar la nota: {error}",
     regeneratingNotes: "Regenerando {count} nota(s)...",
+    regeneratingNotesProgress: "Generando notas... {done} / {total}",
     regeneratedNotes: "Se regeneraron {count}/{total} nota(s).",
     noMatchingTvShows: "Aún no hay series coincidentes en tu biblioteca.",
     libraryEmpty: "Tu biblioteca está vacía. Agrega algo primero.",

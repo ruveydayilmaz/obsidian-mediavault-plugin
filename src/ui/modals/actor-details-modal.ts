@@ -17,6 +17,8 @@ export interface ActorDetailsCrewFilter {
   roles: string[];
 }
 
+const LARGE_FILMOGRAPHY_THRESHOLD = 30;
+
 const DEPARTMENT_PRIORITY = [
   "Directing",
   "Writing",
@@ -73,8 +75,6 @@ export class ActorDetailsModal extends Modal {
     Record<FilmographyCategory, string>
   > = {};
   private visibleCountByKey: Map<string, number> = new Map();
-  private visibleUpcomingCount = 30;
-  private visiblePreviousCount = 30;
 
   private categoryTabBarEl!: HTMLElement;
   private filmographyHeadingDiv!: HTMLElement;
@@ -128,7 +128,7 @@ export class ActorDetailsModal extends Modal {
     if (!this.person) return;
     contentEl
       .querySelectorAll(
-        ".mediavault-actor-header, .mediavault-actor-filmography-heading, .mediavault-detail-tabs, .mediavault-actor-filmography-grid, .mediavault-actor-filmography-groups, .mediavault-modal-hint",
+        ".mediavault-actor-header, .mediavault-actor-filmography-heading-div, .mediavault-detail-tabs, .mediavault-actor-filmography-grid, .mediavault-actor-filmography-groups, .mediavault-modal-hint",
       )
       .forEach((el) => el.remove());
 
@@ -141,10 +141,6 @@ export class ActorDetailsModal extends Modal {
       });
     }
     const info = header.createDiv({ cls: "mediavault-actor-info" });
-    info.createEl("h2", {
-      cls: "mediavault-actor-name",
-      text: this.person.name,
-    });
 
     const dateParts: string[] = [];
     if (this.person.birthday) {
@@ -220,7 +216,7 @@ export class ActorDetailsModal extends Modal {
 
     if (this.person.biography) {
       renderExpandableText(
-        info,
+        header,
         this.person.biography,
         this.biographyExpanded,
         () => {
@@ -249,19 +245,12 @@ export class ActorDetailsModal extends Modal {
 
     this.filmographyHeadingDiv.createEl("h3", {
       cls: "mediavault-actor-filmography-heading",
-      text: this.crewFilter
-        ? this.crewFilter.roles.map((r) => crewRoleLabel(r)).join(" & ")
-        : t("detail.filmography"),
+      text: t("detail.filmography"),
     });
 
     this.renderDepartmentTabBar(this.filmographyHeadingDiv);
 
-    if (this.crewFilter) {
-      this.renderCrewFilmography(contentEl, this.crewFilter);
-      return;
-    }
-
-    if (this.person.credits.length === 0) {
+    if (this.filteredCredits().length === 0) {
       contentEl.createDiv({
         cls: "mediavault-modal-hint",
         text: t("detail.noFilmography"),
@@ -281,101 +270,22 @@ export class ActorDetailsModal extends Modal {
     this.renderGrid();
   }
 
-  private renderCrewFilmography(
-    contentEl: HTMLElement,
-    filter: ActorDetailsCrewFilter,
-  ): void {
-    if (!this.person) return;
+  private filteredCredits(): TMDBFilmographyItem[] {
+    const all = this.person?.credits ?? [];
+    if (!this.crewFilter) return all;
     const jobs = new Set(
-      filter.roles.flatMap((role) => CREW_ROLE_JOBS[role] ?? []),
+      this.crewFilter.roles.flatMap((role) => CREW_ROLE_JOBS[role] ?? []),
     );
-    const items = this.person.credits.filter(
+    return all.filter(
       (item) =>
         item.department !== "Acting" && item.jobs.some((job) => jobs.has(job)),
     );
-
-    if (items.length === 0) {
-      contentEl.createDiv({
-        cls: "mediavault-modal-hint",
-        text: t("detail.noFilmography"),
-      });
-      return;
-    }
-
-    const todayIso = new Date().toISOString().slice(0, 10);
-    const upcoming = items
-      .filter((item) => !!item.releaseDate && item.releaseDate > todayIso)
-      .sort((a, b) => (a.releaseDate ?? "").localeCompare(b.releaseDate ?? ""));
-    const previous = items
-      .filter((item) => !item.releaseDate || item.releaseDate <= todayIso)
-      .sort((a, b) => (b.releaseDate ?? "").localeCompare(a.releaseDate ?? ""));
-
-    const groups = contentEl.createDiv({
-      cls: "mediavault-actor-filmography-groups",
-    });
-
-    if (upcoming.length > 0) {
-      this.renderCrewGroup(
-        groups,
-        t("detail.filmographyUpcoming"),
-        upcoming,
-        "upcoming",
-      );
-    }
-    if (previous.length > 0) {
-      this.renderCrewGroup(
-        groups,
-        t("detail.filmographyPrevious"),
-        previous,
-        "previous",
-      );
-    }
-  }
-
-  private renderCrewGroup(
-    container: HTMLElement,
-    label: string,
-    items: TMDBFilmographyItem[],
-    kind: "upcoming" | "previous",
-  ): void {
-    const section = container.createDiv({
-      cls: "mediavault-actor-filmography-group",
-    });
-    section.createEl("h4", {
-      cls: "mediavault-actor-filmography-group-heading",
-      text: `${label} · ${items.length}`,
-    });
-    const grid = section.createDiv({
-      cls: "mediavault-actor-filmography-grid",
-    });
-    const visibleCount =
-      kind === "upcoming"
-        ? this.visibleUpcomingCount
-        : this.visiblePreviousCount;
-    const page = items.slice(0, visibleCount);
-    page.forEach((item) => this.renderFilmographyCard(grid, item));
-
-    if (items.length > visibleCount) {
-      const moreBtn = grid.createEl("button", {
-        cls: "mediavault-actor-load-more",
-        text: t("detail.loadMoreRemaining", {
-          count: items.length - visibleCount,
-        }),
-      });
-      moreBtn.addEventListener("click", () => {
-        if (kind === "upcoming") this.visibleUpcomingCount += 30;
-        else this.visiblePreviousCount += 30;
-        this.render(this.contentEl);
-      });
-    }
   }
 
   private creditsForCategory(
     category: FilmographyCategory,
   ): TMDBFilmographyItem[] {
-    return (
-      this.person?.credits.filter((item) => item.category === category) ?? []
-    );
+    return this.filteredCredits().filter((item) => item.category === category);
   }
 
   private departmentsForCategory(category: FilmographyCategory): string[] {
@@ -446,7 +356,10 @@ export class ActorDetailsModal extends Modal {
     if (!this.activeCategory) return;
 
     const departments = this.departmentsForCategory(this.activeCategory);
-    if (departments.length <= 1) return;
+    const totalCount = this.creditsForCategory(this.activeCategory).length;
+    if (departments.length <= 1 && totalCount < LARGE_FILMOGRAPHY_THRESHOLD) {
+      return;
+    }
 
     const current = this.activeDepartment();
     const activeCategory = this.activeCategory;

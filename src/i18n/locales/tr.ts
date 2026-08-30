@@ -597,6 +597,7 @@ const tr: TranslationDict = {
     noteUpdated: "Not güncellendi: {path}",
     noteGenerationFailed: "Not oluşturulamadı: {error}",
     regeneratingNotes: "{count} not yeniden oluşturuluyor...",
+    regeneratingNotesProgress: "Notlar oluşturuluyor... {done} / {total}",
     regeneratedNotes: "{count}/{total} not yeniden oluşturuldu.",
     noMatchingTvShows: "Kitaplığınızda henüz eşleşen bir dizi yok.",
     libraryEmpty: "Kitaplığınız boş. Başlamak için bir film veya dizi ekleyin.",

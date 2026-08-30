@@ -564,6 +564,7 @@ const ptBR: TranslationDict = {
     noteUpdated: "Nota atualizada: {path}",
     noteGenerationFailed: "Falha ao gerar a nota: {error}",
     regeneratingNotes: "Regenerando {count} nota(s)...",
+    regeneratingNotesProgress: "Gerando notas... {done} / {total}",
     regeneratedNotes: "{count}/{total} nota(s) regenerada(s).",
     noMatchingTvShows: "Ainda não há séries correspondentes na sua biblioteca.",
     libraryEmpty: "Sua biblioteca está vazia. Adicione algo primeiro.",

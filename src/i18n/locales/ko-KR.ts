@@ -564,6 +564,7 @@ const koKR: TranslationDict = {
     noteUpdated: "노트가 업데이트되었습니다: {path}",
     noteGenerationFailed: "노트 생성 실패: {error}",
     regeneratingNotes: "노트 {count}개를 다시 생성하는 중...",
+    regeneratingNotesProgress: "노트 생성 중... {done} / {total}",
     regeneratedNotes: "노트 {count}/{total}개를 다시 생성했습니다.",
     noMatchingTvShows: "라이브러리에 일치하는 TV 프로그램이 아직 없습니다.",
     libraryEmpty: "라이브러리가 비어 있습니다. 먼저 항목을 추가하세요.",

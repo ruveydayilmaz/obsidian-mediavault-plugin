@@ -47,7 +47,10 @@ import { TraktService } from "./api/trakt";
 import { ensureValidTraktToken } from "./services/trakt-token";
 import { pullFromTrakt, pushToTrakt } from "./services/trakt-sync";
 import { generateTraktHistoryNote } from "./services/trakt-note-generator";
-import { generateMediaNote } from "./services/note-generator/media-note-generator";
+import {
+  generateMediaNote,
+  generateNotesInBatches,
+} from "./services/note-generator/media-note-generator";
 import { AnalyticsSummaryModal } from "./ui/modals/analytics-summary-modal";
 import { ComfortFinderModal } from "./ui/modals/comfort-finder-modal";
 import { seedBuiltInPresets } from "./services/comfort/seed-presets";
@@ -317,20 +320,29 @@ export default class MediaVaultPlugin extends Plugin {
 
   async regenerateAllNotes(): Promise<void> {
     const all = await this.storage.media.getAll();
-    new Notice(t("notice.regeneratingNotes", { count: all.length }));
-    let count = 0;
-    for (const media of all) {
-      try {
-        await generateMediaNote(this.app, this.storage, media);
-        count++;
-      } catch (err) {
-        console.warn(
-          `MediaVault: failed to generate note for "${media.title}"`,
-          err,
+    const total = all.length;
+    if (total === 0) return;
+
+    const notice = new Notice(
+      t("notice.regeneratingNotes", { count: total }),
+      0,
+    );
+
+    const result = await generateNotesInBatches(
+      this.app,
+      this.storage,
+      all,
+      (done, doneTotal) => {
+        notice.setMessage(
+          t("notice.regeneratingNotesProgress", { done, total: doneTotal }),
         );
-      }
-    }
-    new Notice(t("notice.regeneratedNotes", { count, total: all.length }));
+      },
+    );
+
+    notice.hide();
+    new Notice(
+      t("notice.regeneratedNotes", { count: result.succeeded, total }),
+    );
   }
 
   private async openSelectMediaThen(

@@ -202,30 +202,20 @@ export class TMDBService {
     return searchFn(rawQuery.trim(), page, null);
   }
 
-  async searchMulti(
-    query: string,
+  async searchMediaMulti(
+    rawQuery: string,
     page = 1,
   ): Promise<PagedResult<TMDBSearchResult>> {
-    const key = `search:multi:${query}:${page}:${this.language}`;
-    return this.cached(key, async () => {
-      const raw = await this.http.get<TMDBRawSearchResponse>("/search/multi", {
-        params: {
-          query,
-          page,
-          language: this.language,
-          include_adult: this.includeAdult,
-        },
-      });
-      const items = raw.results
-        .filter((r) => r.media_type === "movie" || r.media_type === "tv")
-        .map((r) => normalizeSearchResult(r, r.media_type as "movie" | "tv"));
-      return {
-        items,
-        total: raw.total_results,
-        page: raw.page,
-        pageSize: items.length,
-      };
-    });
+    const [movies, tv] = await Promise.all([
+      this.searchMedia(rawQuery, "movie", page),
+      this.searchMedia(rawQuery, "tv", page),
+    ]);
+    return {
+      items: [...movies.items, ...tv.items],
+      total: movies.total + tv.total,
+      page,
+      pageSize: movies.items.length + tv.items.length,
+    };
   }
 
   async getMovie(tmdbId: number): Promise<TMDBNormalizedDetails> {

@@ -558,9 +558,8 @@ export class ExploreView extends ItemView {
         return;
       }
 
-      const [movies, tv, people] = await Promise.all([
-        this.plugin.tmdb.searchMedia(query, "movie", 1),
-        this.plugin.tmdb.searchMedia(query, "tv", 1),
+      const [media, people] = await Promise.all([
+        this.plugin.tmdb.searchMediaMulti(query, 1),
         this.plugin.tmdb.searchPeople(query, 1),
       ]);
       if (query !== this.searchQuery || this.searchCategory !== category) {
@@ -568,11 +567,7 @@ export class ExploreView extends ItemView {
       }
       loading.remove();
 
-      if (
-        movies.items.length === 0 &&
-        tv.items.length === 0 &&
-        people.items.length === 0
-      ) {
+      if (media.items.length === 0 && people.items.length === 0) {
         resultsEl.createEl("p", {
           cls: "mediavault-empty-state",
           text: t("explore.noResults"),
@@ -580,7 +575,7 @@ export class ExploreView extends ItemView {
         return;
       }
 
-      const mediaCards = [...movies.items, ...tv.items].map(fromSearchResult);
+      const mediaCards = media.items.map(fromSearchResult);
       if (mediaCards.length > 0) this.renderGrid(resultsEl, mediaCards);
       if (people.items.length > 0) {
         resultsEl.createEl("h3", { text: t("explore.searchPeople") });

@@ -404,6 +404,7 @@
   display: -webkit-box;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+  line-clamp: 2;
   overflow: hidden;
   text-overflow: ellipsis;
 }
@@ -3768,13 +3769,18 @@ body.mediavault-android .mediavault-explore-filter-bar select {
 }
 
 .mediavault-actor-header {
-  display: flex;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: 140px 1fr;
+  grid-template-areas:
+    "photo info"
+    "photo bio";
+  gap: 4px 16px;
   padding: var(--p-spacing);
-  align-items: flex-start;
+  align-items: start;
 }
 
 .mediavault-actor-photo {
+  grid-area: photo;
   width: 140px;
   border-radius: 8px;
   flex-shrink: 0;
@@ -3782,6 +3788,7 @@ body.mediavault-android .mediavault-explore-filter-bar select {
 }
 
 .mediavault-actor-info {
+  grid-area: info;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -3816,6 +3823,7 @@ body.mediavault-android .mediavault-explore-filter-bar select {
 }
 
 .mediavault-actor-biography {
+  grid-area: bio;
   margin: 4px 0 0 0;
 }
 
@@ -3824,6 +3832,35 @@ body.mediavault-android .mediavault-explore-filter-bar select {
   color: var(--text-muted);
   line-height: 1.5;
   margin: 0;
+}
+
+.is-phone .mediavault-actor-header {
+  grid-template-areas:
+    "photo info"
+    "bio bio";
+}
+
+@media (max-width: 600px) {
+  .mediavault-actor-header {
+    grid-template-areas:
+      "photo info"
+      "bio bio";
+    grid-template-columns: 100px 1fr;
+  }
+
+  .mediavault-actor-photo {
+    width: 100px;
+  }
+}
+
+@media (max-width: 380px) {
+  .mediavault-actor-header {
+    grid-template-columns: 96px 1fr;
+  }
+
+  .mediavault-actor-photo {
+    width: 96px;
+  }
 }
 
 .mediavault-actor-filmography-heading-div {
