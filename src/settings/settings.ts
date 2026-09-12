@@ -4,6 +4,58 @@ import type { Locale } from "../i18n/types";
 
 export type { RatingScale };
 
+export type NoteTemplateOptionalPropertyKey =
+  | "genres"
+  | "status"
+  | "rating_avg"
+  | "watch_count"
+  | "synopsis"
+  | "platform"
+  | "release_date"
+  | "runtime"
+  | "cast"
+  | "director"
+  | "producer"
+  | "studios"
+  | "country"
+  | "language"
+  | "poster"
+  | "backdrop"
+  | "tmdb_url";
+
+export type NoteTemplateSectionKey =
+  | "genreTags"
+  | "cast"
+  | "watchHistory"
+  | "synopsis"
+  | "crew"
+  | "directors"
+  | "producers";
+
+export interface NoteTemplateSettings {
+  optionalProperties: Record<NoteTemplateOptionalPropertyKey, boolean>;
+  sections: Record<NoteTemplateSectionKey, boolean>;
+}
+
+export type NoteSyncStatus =
+  | "idle"
+  | "syncing"
+  | "completed"
+  | "interrupted"
+  | "failed";
+
+export interface NoteSyncState {
+  createdAt: string;
+  status: NoteSyncStatus;
+  lastSuccessfulSyncAt: string | null;
+  lastSyncStartedAt: string | null;
+  lastSyncCompletedAt: string | null;
+  totalItems: number;
+  completedItems: number;
+  pendingMediaIds: string[];
+  failedMediaIds: string[];
+}
+
 export interface MediaVaultSettings {
   dataVersion: number;
 
@@ -63,9 +115,14 @@ export interface MediaVaultSettings {
   commentsPrimaryLanguage: string;
   commentsAdditionalLanguages: string[];
   showAdultContent: boolean;
+  showLibraryCarousels: boolean;
   favoriteListSortModes: { movies: ListSortMode; tv: ListSortMode };
   favoriteListManualOrder: { movies: string[]; tv: string[] };
   genreImageCache: Record<string, string>;
+
+  noteTemplate: NoteTemplateSettings;
+
+  noteSyncState: NoteSyncState;
 }
 
 export const DEFAULT_SETTINGS: MediaVaultSettings = {
@@ -109,7 +166,51 @@ export const DEFAULT_SETTINGS: MediaVaultSettings = {
   commentsPrimaryLanguage: "en",
   commentsAdditionalLanguages: [],
   showAdultContent: false,
+  showLibraryCarousels: true,
   favoriteListSortModes: { movies: "recent", tv: "recent" },
   favoriteListManualOrder: { movies: [], tv: [] },
   genreImageCache: {},
+
+  noteTemplate: {
+    optionalProperties: {
+      genres: true,
+      status: true,
+      rating_avg: true,
+      watch_count: true,
+      synopsis: false,
+      platform: false,
+      release_date: false,
+      runtime: false,
+      cast: false,
+      director: false,
+      producer: false,
+      studios: false,
+      country: false,
+      language: false,
+      poster: false,
+      backdrop: false,
+      tmdb_url: false,
+    },
+    sections: {
+      genreTags: true,
+      cast: true,
+      watchHistory: true,
+      synopsis: false,
+      crew: false,
+      directors: false,
+      producers: false,
+    },
+  },
+
+  noteSyncState: {
+    createdAt: new Date(0).toISOString(),
+    status: "idle",
+    lastSuccessfulSyncAt: null,
+    lastSyncStartedAt: null,
+    lastSyncCompletedAt: null,
+    totalItems: 0,
+    completedItems: 0,
+    pendingMediaIds: [],
+    failedMediaIds: [],
+  },
 };

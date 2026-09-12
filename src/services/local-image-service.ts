@@ -4,6 +4,12 @@ import { normalizePath } from "obsidian";
 const LOCAL_IMAGE_PREFIX = "local:";
 const COVERS_SUBFOLDER = "Covers";
 
+export function isRemoteImageUrl(
+  path: string | null | undefined,
+): path is string {
+  return !!path && /^https?:\/\//i.test(path);
+}
+
 const EXTENSION_BY_MIME: Record<string, string> = {
   "image/jpeg": "jpg",
   "image/jpg": "jpg",
@@ -34,6 +40,7 @@ export function resolveMediaImageSrc(
   tmdbUrl: (path: string | null) => string | null,
 ): string | null {
   if (!path) return null;
+  if (isRemoteImageUrl(path)) return path;
   if (!isLocalImagePath(path)) return tmdbUrl(path);
   if (!appRef) return null;
   const vaultPath = localImageVaultPath(path);

@@ -3,12 +3,36 @@ import { WatchSession } from "../../models/review";
 import { Episode, EpisodeProgress } from "../../models/episode";
 import { MediaStatus, MediaType } from "../../types/enums";
 import { AnalyticsSummary, CountItem, TrendPoint } from "./types";
+import { CREW_ROLE_JOBS } from "../../api/tmdb-normalize";
 
 function topN(counts: Map<string, number>, n: number): CountItem[] {
   return [...counts.entries()]
     .map(([label, count]) => ({ label, count }))
     .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
     .slice(0, n);
+}
+
+function topNPeople(
+  counts: Map<string, { count: number; tmdbPersonId: number }>,
+  n: number,
+): CountItem[] {
+  return [...counts.entries()]
+    .map(([label, v]) => ({ label, count: v.count, tmdbPersonId: v.tmdbPersonId }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label))
+    .slice(0, n);
+}
+
+function incrementPerson(
+  map: Map<string, { count: number; tmdbPersonId: number }>,
+  name: string,
+  tmdbPersonId: number,
+): void {
+  const existing = map.get(name);
+  if (existing) {
+    existing.count += 1;
+  } else {
+    map.set(name, { count: 1, tmdbPersonId });
+  }
 }
 
 function increment(map: Map<string, number>, key: string, by = 1): void {
@@ -84,16 +108,23 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsSummary {
         ) / 100;
 
   const genreCounts = new Map<string, number>();
-  const actorCounts = new Map<string, number>();
-  const directorCounts = new Map<string, number>();
+  const actorCounts = new Map<string, { count: number; tmdbPersonId: number }>();
+  const directorCounts = new Map<string, { count: number; tmdbPersonId: number }>();
+  const producerCounts = new Map<string, { count: number; tmdbPersonId: number }>();
   const studioCounts = new Map<string, number>();
+
+  const directorJobs = new Set(CREW_ROLE_JOBS.Director);
+  const producerJobs = new Set(CREW_ROLE_JOBS.Producer);
 
   for (const item of media) {
     item.genres.forEach((g) => increment(genreCounts, g));
-    item.cast.forEach((c) => increment(actorCounts, c.name));
+    item.cast.forEach((c) => incrementPerson(actorCounts, c.name, c.tmdbPersonId));
     item.crew
-      .filter((c) => c.job === "Director" || c.job === "Creator")
-      .forEach((c) => increment(directorCounts, c.name));
+      .filter((c) => directorJobs.has(c.job) || c.job === "Creator")
+      .forEach((c) => incrementPerson(directorCounts, c.name, c.tmdbPersonId));
+    item.crew
+      .filter((c) => c.department === "Production" && producerJobs.has(c.job))
+      .forEach((c) => incrementPerson(producerCounts, c.name, c.tmdbPersonId));
     item.productionCompanies.forEach((p) => increment(studioCounts, p.name));
   }
 
@@ -121,8 +152,9 @@ export function computeAnalytics(input: AnalyticsInput): AnalyticsSummary {
     episodesWatchedCount,
     averageRating,
     topGenres: topN(genreCounts, n),
-    topActors: topN(actorCounts, n),
-    topDirectors: topN(directorCounts, n),
+    topActors: topNPeople(actorCounts, n),
+    topDirectors: topNPeople(directorCounts, n),
+    topProducers: topNPeople(producerCounts, n),
     topStudios: topN(studioCounts, n),
     rewatchCount,
     completionRate,

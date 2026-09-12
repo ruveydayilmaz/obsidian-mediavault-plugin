@@ -15,6 +15,9 @@ const COMMAND_NAME_KEYS: Record<string, string> = {
   "mediavault-comfort-finder": "command.comfortFinder",
   "mediavault-view-stats": "command.viewStats",
   "mediavault-view-stats-quick": "command.viewStatsQuick",
+  "mediavault-sync-notes": "command.syncNotes",
+  "mediavault-export-library": "command.exportLibrary",
+  "mediavault-import-export-file": "command.importMediaVaultExport",
   "mediavault-regenerate-all-notes": "command.regenerateAllNotes",
   "mediavault-trakt-sync-now": "command.traktSyncNow",
   "mediavault-trakt-regenerate-note": "command.traktRegenerateNote",
@@ -51,6 +54,15 @@ import {
   generateMediaNote,
   generateNotesInBatches,
 } from "./services/note-generator/media-note-generator";
+import { NoteSyncService } from "./services/note-sync-service";
+import {
+  generateAllListNotes,
+  reconstructListsFromNotes,
+} from "./services/list-note-generator";
+import { exportMediaToVault } from "./services/mediavault-export";
+import type { ExportCategoryOptions } from "./services/mediavault-export";
+import { MediaVaultImportExportModal } from "./ui/modals/mediavault-import-export-modal";
+import { ExportSelectionModal } from "./ui/modals/export-selection-modal";
 import { AnalyticsSummaryModal } from "./ui/modals/analytics-summary-modal";
 import { ComfortFinderModal } from "./ui/modals/comfort-finder-modal";
 import { seedBuiltInPresets } from "./services/comfort/seed-presets";
@@ -76,6 +88,9 @@ export default class MediaVaultPlugin extends Plugin {
   statistics!: StatisticsService;
   private syncIntervalHandle: number | null = null;
   private notificationCheckIntervalHandle: number | null = null;
+  private noteSyncIntervalHandle: number | null = null;
+  noteSync!: NoteSyncService;
+  private mediaChangeDebounceHandle: number | null = null;
   private unsubscribeLocaleChange: (() => void) | null = null;
   private localeAwareModals: Set<{ rerenderForLocaleChange: () => void }> =
     new Set();
@@ -92,6 +107,18 @@ export default class MediaVaultPlugin extends Plugin {
     this.statistics = new StatisticsService(this.storage);
     await seedBuiltInPresets(this.storage);
     await this.ensureNotificationActivationDate();
+
+    this.noteSync = new NoteSyncService(this.app, this.storage);
+
+    this.storage.media.onUpdated = () => {
+      if (this.mediaChangeDebounceHandle !== null) {
+        window.clearTimeout(this.mediaChangeDebounceHandle);
+      }
+      this.mediaChangeDebounceHandle = window.setTimeout(() => {
+        this.mediaChangeDebounceHandle = null;
+        void this.noteSync.checkAndSyncIfNeeded();
+      }, 4000);
+    };
 
     this.tmdb = new TMDBService({
       getApiKey: () => this.storage.settings.get().tmdbApiKey,
@@ -113,6 +140,7 @@ export default class MediaVaultPlugin extends Plugin {
 
     this.setupTraktAutoSync();
     this.setupNotificationSchedule();
+    this.setupNoteSyncSchedule();
     this.setupInputKeyboardUX();
 
     this.registerView(VIEW_TYPE_LIBRARY, (leaf) => new LibraryView(leaf, this));
@@ -239,7 +267,34 @@ export default class MediaVaultPlugin extends Plugin {
       id: "view-stats-quick",
       name: t("command.viewStatsQuick"),
       callback: () => {
-        new AnalyticsSummaryModal(this.app, this.storage).open();
+        new AnalyticsSummaryModal(this.app, this.storage, this.tmdb).open();
+      },
+    });
+
+    this.addCommand({
+      id: "sync-notes",
+      name: t("command.syncNotes"),
+      callback: () => {
+        void this.runManualNoteSync();
+      },
+    });
+
+    this.addCommand({
+      id: "export-library",
+      name: t("command.exportLibrary"),
+      callback: () => {
+        void this.runExportLibrary();
+      },
+    });
+
+    this.addCommand({
+      id: "import-export-file",
+      name: t("command.importMediaVaultExport"),
+      callback: () => {
+        new MediaVaultImportExportModal(this.app, this.storage, () => {
+          this.refreshLibraryViews();
+          this.refreshListViews();
+        }).open();
       },
     });
 
@@ -309,7 +364,11 @@ export default class MediaVaultPlugin extends Plugin {
 
   async generateNoteFor(media: MediaItem): Promise<void> {
     try {
-      const path = await generateMediaNote(this.app, this.storage, media);
+      const { notePath: path } = await generateMediaNote(
+        this.app,
+        this.storage,
+        media,
+      );
       new Notice(t("notice.noteUpdated", { path }));
     } catch (err) {
       new Notice(
@@ -320,7 +379,8 @@ export default class MediaVaultPlugin extends Plugin {
 
   async regenerateAllNotes(): Promise<void> {
     const all = await this.storage.media.getAll();
-    const total = all.length;
+    const lists = await this.storage.customLists.getAll();
+    const total = all.length + lists.length;
     if (total === 0) return;
 
     const notice = new Notice(
@@ -328,21 +388,96 @@ export default class MediaVaultPlugin extends Plugin {
       0,
     );
 
-    const result = await generateNotesInBatches(
-      this.app,
-      this.storage,
-      all,
-      (done, doneTotal) => {
-        notice.setMessage(
-          t("notice.regeneratingNotesProgress", { done, total: doneTotal }),
-        );
-      },
-    );
+    const result =
+      all.length > 0
+        ? await generateNotesInBatches(
+            this.app,
+            this.storage,
+            all,
+            (done, doneTotal) => {
+              notice.setMessage(
+                t("notice.regeneratingNotesProgress", { done, total: doneTotal }),
+              );
+            },
+          )
+        : { succeeded: 0, failed: 0, total: 0 };
+
+    let listsSucceeded = 0;
+    if (lists.length > 0) {
+      const listResult = await generateAllListNotes(
+        this.app,
+        this.storage,
+        (done, doneTotal) => {
+          notice.setMessage(t("notice.regeneratingListNotesProgress", { done, total: doneTotal }));
+        },
+      );
+      listsSucceeded = listResult.succeeded;
+    }
 
     notice.hide();
     new Notice(
-      t("notice.regeneratedNotes", { count: result.succeeded, total }),
+      t("notice.regeneratedNotes", {
+        count: result.succeeded + listsSucceeded,
+        total,
+      }),
     );
+  }
+
+  async runManualNoteSync(): Promise<void> {
+    if (this.noteSync.isRunning()) {
+      new Notice(t("noteSync.alreadyRunning"));
+      return;
+    }
+    const notice = new Notice(t("noteSync.syncing"), 0);
+    await this.noteSync.runManualSync((done, total) => {
+      notice.setMessage(t("noteSync.syncingProgress", { done, total }));
+    });
+    notice.hide();
+    new Notice(t("noteSync.syncComplete"));
+    this.refreshLibraryViews();
+    this.refreshListViews();
+  }
+
+  async runExportLibrary(): Promise<void> {
+    const all = await this.storage.media.getAll();
+    if (all.length === 0) {
+      new Notice(t("notice.libraryEmpty"));
+      return;
+    }
+    new ExportSelectionModal(this.app, all, (result) => {
+      void this.runExportFor(result.items, result.categories);
+    }).open();
+  }
+
+  async runExportFor(
+    mediaItems: MediaItem[],
+    categories?: ExportCategoryOptions,
+  ): Promise<void> {
+    if (mediaItems.length === 0) {
+      new Notice(t("notice.libraryEmpty"));
+      return;
+    }
+    const notice = new Notice(t("exportImport.exporting"), 0);
+    try {
+      const path = await exportMediaToVault(
+        this.app,
+        this.storage,
+        mediaItems,
+        (done, total) => {
+          notice.setMessage(t("exportImport.exportingProgress", { done, total }));
+        },
+        categories,
+      );
+      notice.hide();
+      new Notice(t("exportImport.exportComplete", { path }));
+    } catch (err) {
+      notice.hide();
+      new Notice(
+        t("exportImport.exportFailed", {
+          error: err instanceof Error ? err.message : String(err),
+        }),
+      );
+    }
   }
 
   private async openSelectMediaThen(
@@ -686,6 +821,25 @@ export default class MediaVaultPlugin extends Plugin {
     await this.storage.settings.update({
       notificationPluginActivationDate: today,
     });
+  }
+
+  private setupNoteSyncSchedule(): void {
+    window.setTimeout(() => void this.noteSync.checkOnStartup(), 3000);
+
+    window.setTimeout(() => {
+      void reconstructListsFromNotes(this.app, this.storage).then((count) => {
+        if (count > 0) {
+          this.refreshListViews();
+          new Notice(t("notice.listsReconstructed", { count }));
+        }
+      });
+    }, 3500);
+
+    this.noteSyncIntervalHandle = window.setInterval(
+      () => void this.noteSync.checkAndSyncIfNeeded(),
+      60 * 60 * 1000,
+    );
+    this.registerInterval(this.noteSyncIntervalHandle);
   }
 
   private setupNotificationSchedule(): void {

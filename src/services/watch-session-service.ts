@@ -94,7 +94,7 @@ export async function findSessionByExternalRef(
   return matches[0] ?? null;
 }
 
-async function syncMediaAggregates(
+export async function syncMediaAggregates(
   storage: StorageService,
   mediaId: string,
   activityAt?: string,

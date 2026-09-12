@@ -1,4 +1,4 @@
-import { App, Modal, Notice, Menu, setIcon, TFile } from "obsidian";
+import { App, Modal, Notice, Menu, setIcon, TFile, Platform } from "obsidian";
 import { renderMobileBackButton } from "./modal-chrome";
 import { confirmDialog } from "./confirm-modal";
 import type { StorageService } from "../../services/storage";
@@ -38,6 +38,9 @@ import {
   deleteEpisodeWatch,
   sortEpisodeWatchesChronological,
 } from "../../services/episode-watch-service";
+import { EditEpisodeWatchModal } from "./edit-episode-watch-modal";
+import { ChangeStatusModal } from "./change-status-modal";
+import { PlatformModal } from "./platform-modal";
 import { filterAndSortCommentsByLanguage } from "../../services/comment-localization";
 import {
   importEpisodesForShow,
@@ -625,6 +628,41 @@ export class MediaDetailModal extends Modal {
         .onClick(() => this.openImagePicker("backdrop")),
     );
 
+    menu.addItem((item) =>
+      item
+        .setTitle(t("detail.selectPlatform"))
+        .setIcon("tv")
+        .onClick(() => {
+          if (!this.plugin) return;
+          new PlatformModal(this.app, this.storage, this.plugin.tmdb, this.media, () => {
+            this.plugin?.refreshLibraryViews();
+            this.plugin?.refreshListViews();
+            this.onChanged?.();
+            void this.refreshAndNotify();
+          }).open();
+        }),
+    );
+
+    menu.addItem((item) =>
+      item
+        .setTitle(t("detail.changeStatus"))
+        .setIcon("list-checks")
+        .onClick(() => {
+          new ChangeStatusModal(
+            this.app,
+            this.storage,
+            this.media.id,
+            this.media.status,
+            () => {
+              this.plugin?.refreshLibraryViews();
+              this.plugin?.refreshListViews();
+              this.onChanged?.();
+              void this.refreshAndNotify();
+            },
+          ).open();
+        }),
+    );
+
     menu.addSeparator();
 
     menu.addItem((item) =>
@@ -634,7 +672,7 @@ export class MediaDetailModal extends Modal {
         )
         .setIcon("file-text")
         .onClick(async () => {
-          const path = await generateMediaNote(
+          const { notePath: path } = await generateMediaNote(
             this.app,
             this.storage,
             this.media,
@@ -1921,6 +1959,65 @@ export class MediaDetailModal extends Modal {
 
     const watches = sortEpisodeWatchesChronological(episodeWatches);
 
+    const doAddWatch = async (): Promise<void> => {
+      if (watches.length === 0) {
+        await this.markEpisodeWatchedWithSmartCompletion(episode);
+      } else {
+        await addEpisodeWatch(this.storage, episode);
+        this.plugin?.refreshLibraryViews();
+        this.plugin?.refreshListViews();
+      }
+      this.onChanged?.();
+      await this.rerenderPreservingEpisodesScroll();
+    };
+
+    const doRemoveOneWatch = async (): Promise<void> => {
+      if (watches.length === 0) return;
+      if (
+        !(await confirmDialog(this.app, t("detail.removeOneWatchConfirm")))
+      ) {
+        return;
+      }
+      await removeOneEpisodeWatch(this.storage, episode);
+      this.plugin?.refreshLibraryViews();
+      this.plugin?.refreshListViews();
+      this.onChanged?.();
+      await this.rerenderPreservingEpisodesScroll();
+    };
+
+    if (!Platform.isMobile && watches.length > 0) {
+      const controls = row.createDiv({
+        cls: "mediavault-episode-watch-stepper",
+      });
+
+      const minusBtn = controls.createEl("button", {
+        cls: "clickable-icon mediavault-episode-watch-stepper-btn",
+      });
+      setIcon(minusBtn, "minus");
+      minusBtn.setAttr("aria-label", t("detail.removeOneWatchConfirm"));
+      minusBtn.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        void doRemoveOneWatch();
+      });
+
+      controls.createSpan({
+        cls: "mediavault-episode-watch-stepper-count",
+        text: String(watches.length),
+      });
+
+      const plusBtn = controls.createEl("button", {
+        cls: "clickable-icon mediavault-episode-watch-stepper-btn",
+      });
+      setIcon(plusBtn, "plus");
+      plusBtn.setAttr("aria-label", t("detail.markWatched"));
+      plusBtn.addEventListener("click", (evt) => {
+        evt.stopPropagation();
+        void doAddWatch();
+      });
+
+      return;
+    }
+
     const watchBtn = row.createEl("button", {
       cls:
         watches.length === 0
@@ -1949,16 +2046,7 @@ export class MediaDetailModal extends Modal {
           return;
         }
 
-        if (watches.length === 0) {
-          await this.markEpisodeWatchedWithSmartCompletion(episode);
-        } else {
-          await addEpisodeWatch(this.storage, episode);
-          this.plugin?.refreshLibraryViews();
-          this.plugin?.refreshListViews();
-        }
-
-        this.onChanged?.();
-        await this.rerenderPreservingEpisodesScroll();
+        await doAddWatch();
       })();
     });
 
@@ -1980,21 +2068,7 @@ export class MediaDetailModal extends Modal {
           void (async () => {
             longPressTimer = null;
             watchBtn.dataset.longPressed = "1";
-
-            if (
-              !(await confirmDialog(
-                this.app,
-                t("detail.removeOneWatchConfirm"),
-              ))
-            ) {
-              return;
-            }
-
-            await removeOneEpisodeWatch(this.storage, episode);
-            this.plugin?.refreshLibraryViews();
-            this.plugin?.refreshListViews();
-            this.onChanged?.();
-            await this.rerenderPreservingEpisodesScroll();
+            await doRemoveOneWatch();
           })();
         }, LONG_PRESS_MS);
       });
@@ -2400,6 +2474,23 @@ export class MediaDetailModal extends Modal {
       void this.handleDeleteEpisodeWatch(episode, watch.id);
     });
 
+    const editBtn = headerRow.createEl("button", {
+      cls: "clickable-icon mediavault-edit-watch-btn",
+    });
+    setIcon(editBtn, "pencil");
+    editBtn.setAttr("aria-label", t("detail.editWatchDate"));
+    editBtn.addEventListener("click", () => {
+      new EditEpisodeWatchModal(this.app, this.storage, {
+        watch,
+        onSaved: () => {
+          this.plugin?.refreshLibraryViews();
+          this.plugin?.refreshListViews();
+          this.onChanged?.();
+          void this.render();
+        },
+      }).open();
+    });
+
     this.renderEpisodeStarRating(card, watch);
     this.renderEpisodeEmotionPicker(card, watch);
 
@@ -2460,14 +2551,14 @@ export class MediaDetailModal extends Modal {
   }
 
   private static readonly EMOTIONS = [
-    { id: "happy", icon: "smile" },
-    { id: "joy", icon: "laugh" },
-    { id: "neutral", icon: "meh" },
-    { id: "sad", icon: "frown" },
-    { id: "crying", icon: "droplets" },
-    { id: "shocked", icon: "siren" },
-    { id: "love", icon: "heart" },
-    { id: "mindblown", icon: "brain" },
+    { id: "happy", icon: "smile", labelKey: "detail.emotionHappy" },
+    { id: "joy", icon: "laugh", labelKey: "detail.emotionJoy" },
+    { id: "neutral", icon: "meh", labelKey: "detail.emotionNeutral" },
+    { id: "sad", icon: "frown", labelKey: "detail.emotionSad" },
+    { id: "crying", icon: "droplets", labelKey: "detail.emotionCrying" },
+    { id: "shocked", icon: "siren", labelKey: "detail.emotionShocked" },
+    { id: "love", icon: "heart", labelKey: "detail.emotionLove" },
+    { id: "mindblown", icon: "brain", labelKey: "detail.emotionMindblown" },
   ];
 
   private renderEpisodeEmotionPicker(
@@ -2484,11 +2575,15 @@ export class MediaDetailModal extends Modal {
     const row = wrap.createDiv({ cls: "mediavault-emotion-row" });
 
     MediaDetailModal.EMOTIONS.forEach((emotion) => {
+      const label = t(emotion.labelKey);
       const btn = row.createEl("button", {
         cls: "mediavault-emotion-btn",
+        attr: { "aria-label": label, title: label },
       });
 
-      setIcon(btn, emotion.icon);
+      const iconEl = btn.createDiv({ cls: "clickable-icon mediavault-emotion-btn-icon" });
+      setIcon(iconEl, emotion.icon);
+      btn.createDiv({ cls: "mediavault-emotion-btn-label", text: label });
 
       btn.toggleClass("is-selected", watch.emotion === emotion.id);
 

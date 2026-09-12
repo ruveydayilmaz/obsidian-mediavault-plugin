@@ -102,6 +102,38 @@ export class I18nService {
     return this.interpolate(str, params);
   }
 
+
+  tPlural(key: string, count: number, params?: TranslationParams): string {
+    const category = this.pluralCategory(count);
+    const mergedParams: TranslationParams = { count, ...params };
+
+    const current = LOCALES[this.locale];
+    let str =
+      this.lookup(current, `${key}_${category}`) ??
+      this.lookup(current, `${key}_other`);
+
+    if (str === undefined && this.locale !== DEFAULT_LOCALE) {
+      const fallback = LOCALES[DEFAULT_LOCALE];
+      str =
+        this.lookup(fallback, `${key}_${category}`) ??
+        this.lookup(fallback, `${key}_other`);
+    }
+
+    if (str === undefined) {
+      return this.t(key, mergedParams);
+    }
+
+    return this.interpolate(str, mergedParams);
+  }
+
+  private pluralCategory(count: number): Intl.LDMLPluralRule {
+    try {
+      return new Intl.PluralRules(this.intlLocale).select(count);
+    } catch {
+      return count === 1 ? "one" : "other";
+    }
+  }
+
   private get intlLocale(): string {
     return LOCALE_INTL_TAG[this.locale] ?? LOCALE_INTL_TAG[DEFAULT_LOCALE];
   }
@@ -198,4 +230,12 @@ export const i18n = new I18nService();
 
 export function t(key: string, params?: TranslationParams): string {
   return i18n.t(key, params);
+}
+
+export function tPlural(
+  key: string,
+  count: number,
+  params?: TranslationParams,
+): string {
+  return i18n.tPlural(key, count, params);
 }

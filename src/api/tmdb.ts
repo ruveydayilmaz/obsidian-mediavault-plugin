@@ -28,6 +28,8 @@ import {
   TMDBFilmographyItem,
   TMDBRawPersonSearchResponse,
   TMDBPersonSearchResult,
+  TMDBRawWatchProvidersResponse,
+  TMDBWatchProviderOption,
 } from "../types/tmdb";
 import { PagedResult } from "../types/common";
 
@@ -82,6 +84,13 @@ export class TMDBService {
 
   private get language(): string {
     return this.config.getLanguage?.() ?? "en-US";
+  }
+
+  private get region(): string {
+    const explicit = this.config.getRegion?.();
+    if (explicit) return explicit;
+    const parts = this.language.split("-");
+    return parts[1] ?? "US";
   }
 
   private resolveSearchLanguage(options: TMDBSearchOptions): string | null {
@@ -619,6 +628,42 @@ export class TMDBService {
           languageCode: b.iso_639_1 ?? null,
         })),
       };
+    });
+  }
+
+  async getWatchProviders(
+    tmdbId: number,
+    kind: "movie" | "tv",
+  ): Promise<TMDBWatchProviderOption[]> {
+    const region = this.region;
+    const key = `watch-providers:${kind}:${tmdbId}:${region}`;
+    return this.cached(key, async () => {
+      const raw = await this.http.get<TMDBRawWatchProvidersResponse>(
+        `/${kind}/${tmdbId}/watch/providers`,
+      );
+      const regionData = raw.results?.[region];
+      if (!regionData) return [];
+
+      const merged = new Map<number, TMDBWatchProviderOption>();
+      const buckets = [
+        regionData.flatrate,
+        regionData.free,
+        regionData.ads,
+        regionData.rent,
+        regionData.buy,
+      ];
+      for (const bucket of buckets) {
+        for (const entry of bucket ?? []) {
+          if (!merged.has(entry.provider_id)) {
+            merged.set(entry.provider_id, {
+              providerId: entry.provider_id,
+              name: entry.provider_name,
+              logoPath: entry.logo_path,
+            });
+          }
+        }
+      }
+      return [...merged.values()];
     });
   }
 
