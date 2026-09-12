@@ -1,6 +1,7 @@
 export interface CountItem {
   label: string;
   count: number;
+  tmdbPersonId?: number;
 }
 
 export interface TrendPoint {
@@ -19,6 +20,7 @@ export interface AnalyticsSummary {
   topGenres: CountItem[];
   topActors: CountItem[];
   topDirectors: CountItem[];
+  topProducers: CountItem[];
   topStudios: CountItem[];
 
   rewatchCount: number;

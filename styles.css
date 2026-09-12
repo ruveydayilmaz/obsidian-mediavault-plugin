@@ -449,29 +449,34 @@
 }
 
 .mediavault-episode-review-card {
-  padding: 12px;
+  padding: 16px;
   border-radius: 8px;
   background: var(--background-secondary);
-  margin-bottom: 12px;
+  margin-bottom: 16px;
 }
 
 .mediavault-episode-notes-input {
   width: 100%;
+  margin-top: 0;
+}
+
+.mediavault-episode-notes-input .mediavault-clearable-field {
+  width: 100%;
   min-height: 70px;
-  margin-top: 8px;
   resize: vertical;
   font: inherit;
-  padding: 6px 8px;
-  /* border-radius: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
   border: 1px solid var(--background-modifier-border);
-  background: var(--background-primary); */
+  background: var(--background-primary);
   color: var(--text-normal);
+  box-sizing: border-box;
 }
 
 .mediavault-episode-star-rating {
   display: flex;
   gap: 4px;
-  margin: 10px 0;
+  margin: 0 0 16px 0;
 }
 
 .mediavault-star-btn {
@@ -487,29 +492,56 @@
 }
 
 .mediavault-episode-emotion-picker {
-  margin: 14px 0;
+  margin: 0 0 16px 0;
 }
 
 .mediavault-emotion-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 8px;
 }
 
 .mediavault-emotion-btn {
-  font-size: 1.3em;
-  line-height: 1;
-  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 60px;
+  padding: 8px 4px;
   border-radius: 8px;
   border: 1px solid transparent;
-  background: var(--background-secondary);
+  background: transparent;
   cursor: pointer;
+}
+
+.mediavault-emotion-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mediavault-emotion-btn-icon svg {
+  width: 18px;
+  height: 18px;
+  color: var(--text-muted);
+}
+
+.mediavault-emotion-btn-label {
+  font-size: 0.7em;
+  line-height: 1.15;
+  text-align: center;
+  color: var(--text-muted);
+  white-space: normal;
 }
 
 .mediavault-emotion-btn.is-selected {
   border-color: var(--interactive-accent);
   background: var(--background-modifier-hover);
+}
+
+.mediavault-emotion-btn.is-selected .mediavault-emotion-btn-icon svg,
+.mediavault-emotion-btn.is-selected .mediavault-emotion-btn-label {
+  color: var(--interactive-accent);
 }
 
 .mediavault-episode-crew-list {
@@ -527,7 +559,7 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 6px;
+  margin-bottom: 14px;
 }
 
 .mediavault-episode-watch-card-header .mediavault-detail-meta {
@@ -585,6 +617,40 @@
 .mediavault-detail-log-btn svg {
   width: 20px;
   height: 20px;
+}
+
+.mediavault-episode-watch-stepper {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.mediavault-episode-watch-stepper-btn {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--background-modifier-border);
+  color: var(--text-normal);
+}
+
+.mediavault-episode-watch-stepper-btn:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mediavault-episode-watch-stepper-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.mediavault-episode-watch-stepper-count {
+  min-width: 1.5em;
+  text-align: center;
+  font-weight: 600;
 }
 
 .mediavault-add-to-library-btn {
@@ -683,6 +749,21 @@
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
+.mediavault-image-picker-url {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.mediavault-image-picker-url-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .mediavault-image-picker-grid {
   display: grid;
   width: 100%;
@@ -744,6 +825,95 @@
   color: var(--text-muted);
   font-size: 0.85em;
 }
+
+.mediavault-change-status-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mediavault-change-status-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.mediavault-change-status-row:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mediavault-change-status-row.is-selected {
+  background: var(--background-modifier-active-hover);
+  font-weight: 600;
+}
+
+.mediavault-change-status-current-badge {
+  color: var(--text-muted);
+  font-size: 0.8em;
+}
+
+.mediavault-platform-custom-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  flex-wrap: wrap;
+}
+
+.mediavault-platform-custom-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mediavault-platform-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mediavault-platform-providers-label {
+  margin: 4px 0;
+}
+
+.mediavault-export-selection-search {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.mediavault-export-selection-list {
+  max-height: 320px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 12px;
+}
+
+.mediavault-export-selection-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px;
+}
+
+.mediavault-export-category-toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.mediavault-export-category-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 
 .mediavault-factory-reset-modal .mediavault-modal-hint {
   margin-bottom: 8px;
@@ -1433,6 +1603,22 @@
   border-bottom: 1px solid var(--background-modifier-border);
 }
 
+.mediavault-analytics-toplist-row-clickable {
+  cursor: pointer;
+}
+
+.mediavault-analytics-toplist-row-clickable:hover {
+  background-color: var(--background-modifier-hover);
+}
+
+.mediavault-analytics-toplist-label-link {
+  color: var(--link-color, var(--text-accent));
+}
+
+.mediavault-analytics-clickable-chart canvas {
+  cursor: default;
+}
+
 .mediavault-analytics-toplist-count {
   color: var(--text-muted);
 }
@@ -1982,6 +2168,10 @@ body.mediavault-android .mediavault-comfort-flags .setting-item {
   grid-template-columns: 1fr 1fr;
   gap: 8px;
   align-items: stretch;
+}
+
+.mediavault-parent-container.mediavault-carousels-hidden {
+  display: none;
 }
 
 @media (max-width: 700px) {
@@ -4198,15 +4388,28 @@ body.mediavault-android.is-phone .mediavault-library-root {
   );
 }
 
+.mediavault-android-top-inset-sentinel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  margin: 0;
+  border: 0;
+  visibility: hidden;
+  pointer-events: none;
+  padding-top: env(safe-area-inset-top);
+}
+
 body.mediavault-android
   .modal.mediavault-modal-shell:not(.mediavault-detail-modal)
   > .modal-content {
-  padding-top: max(24px, env(safe-area-inset-top));
+  padding-top: max(24px, var(--mediavault-android-top-inset, 0px), env(safe-area-inset-top));
 }
 
 body.mediavault-android .mediavault-modal-back,
 body.mediavault-android .mediavault-detail-menu-btn {
-  top: max(24px, env(safe-area-inset-top));
+  top: max(24px, var(--mediavault-android-top-inset, 0px), env(safe-area-inset-top));
 }
 
 .is-phone .mediavault-list-tile-banner {

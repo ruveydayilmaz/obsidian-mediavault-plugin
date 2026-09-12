@@ -7,6 +7,24 @@ export type FrontmatterValue =
   | number[];
 export type FrontmatterData = Record<string, FrontmatterValue | undefined>;
 
+export function mergeFrontmatter(
+  generated: FrontmatterData,
+  existing: Record<string, unknown> | null | undefined,
+  managedKeys: Set<string>,
+): FrontmatterData {
+  const merged: FrontmatterData = { ...generated };
+
+  if (existing) {
+    for (const [key, value] of Object.entries(existing)) {
+      if (managedKeys.has(key)) continue;
+      if (key === "position") continue; // metadata cache internal field
+      merged[key] = value as FrontmatterValue;
+    }
+  }
+
+  return merged;
+}
+
 function needsQuoting(value: string): boolean {
   if (value === "") return true;
   return (
@@ -17,14 +35,18 @@ function needsQuoting(value: string): boolean {
   );
 }
 
-function serializeScalar(value: string | number | boolean | null): string {
-  if (value === null) return "null";
+function serializeScalar(value: unknown): string {
+  if (value === null || value === undefined) return "null";
   if (typeof value === "number" || typeof value === "boolean")
     return String(value);
-  if (needsQuoting(value)) {
-    return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  if (typeof value === "string") {
+    if (needsQuoting(value)) {
+      return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+    }
+    return value;
   }
-  return value;
+
+  return serializeScalar(JSON.stringify(value));
 }
 
 export function serializeFrontmatter(data: FrontmatterData): string {

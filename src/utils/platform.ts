@@ -10,6 +10,37 @@ export function applyAndroidBodyClass(): void {
 
 let androidSafeAreaCleanup: (() => void) | null = null;
 
+function ensureViewportFitCover(): void {
+  const meta = document.querySelector('meta[name="viewport"]');
+  if (!meta) return;
+  const content = meta.getAttribute("content") ?? "";
+  if (/viewport-fit\s*=\s*cover/i.test(content)) return;
+  const next = content.trim().length > 0 ? `${content}, viewport-fit=cover` : "viewport-fit=cover";
+  meta.setAttribute("content", next);
+}
+
+let topInsetSentinel: HTMLElement | null = null;
+
+function getTopInsetSentinel(): HTMLElement {
+  if (topInsetSentinel && document.body.contains(topInsetSentinel)) {
+    return topInsetSentinel;
+  }
+  const el = document.body.createDiv({
+    cls: "mediavault-android-top-inset-sentinel",
+    attr: { "aria-hidden": "true" },
+  });
+  topInsetSentinel = el;
+  return el;
+}
+
+function measureAndroidTopInset(): number {
+  const sentinel = getTopInsetSentinel();
+  const computed = window.getComputedStyle(sentinel).paddingTop;
+  const value = parseFloat(computed);
+  if (!Number.isFinite(value) || value < 0) return 0;
+  return Math.round(Math.min(value, 96));
+}
+
 function measureAndroidSystemInset(): number {
   const vv = window.visualViewport;
   if (!vv) return 0;
@@ -108,6 +139,8 @@ export function getAndroidBottomObstruction(): number {
 export function setupAndroidSafeArea(app?: App): void {
   if (!isAndroidDevice() || androidSafeAreaCleanup) return;
 
+  ensureViewportFitCover();
+
   let toolbarEl: HTMLElement | null = null;
   let toolbarResizeObserver: ResizeObserver | null = null;
   let rafHandle: number | null = null;
@@ -117,6 +150,8 @@ export function setupAndroidSafeArea(app?: App): void {
     toolbarResizeObserver = new ResizeObserver(() => updateAll());
     toolbarResizeObserver.observe(el);
   };
+
+  let lastTopInset = -1;
 
   const updateAll = (): void => {
     const systemInset = measureAndroidSystemInset();
@@ -134,6 +169,15 @@ export function setupAndroidSafeArea(app?: App): void {
       "--mediavault-android-toolbar-inset",
       `${toolbarResult.obstruction}px`,
     );
+
+    const topInset = measureAndroidTopInset();
+    if (topInset !== lastTopInset) {
+      lastTopInset = topInset;
+      document.body.style.setProperty(
+        "--mediavault-android-top-inset",
+        `${topInset}px`,
+      );
+    }
 
     if (toolbarResult.el !== toolbarEl) {
       toolbarEl = toolbarResult.el;
@@ -189,6 +233,9 @@ export function setupAndroidSafeArea(app?: App): void {
     toolbarResizeObserver?.disconnect();
     document.body.style.removeProperty("--mediavault-android-bottom-inset");
     document.body.style.removeProperty("--mediavault-android-toolbar-inset");
+    document.body.style.removeProperty("--mediavault-android-top-inset");
+    topInsetSentinel?.remove();
+    topInsetSentinel = null;
   };
 }
 

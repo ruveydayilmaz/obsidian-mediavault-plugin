@@ -3,13 +3,21 @@ import {
   Notice,
   PluginSettingTab,
   Platform,
+  setIcon,
   type SettingDefinitionItem,
 } from "obsidian";
 import type MediaVaultPlugin from "../main";
 import { RatingScale } from "../types/enums";
-import type { MediaVaultSettings } from "./settings";
+import {
+  type MediaVaultSettings,
+  DEFAULT_SETTINGS,
+  NoteTemplateOptionalPropertyKey,
+  NoteTemplateSectionKey,
+} from "./settings";
 import { TraktAuthModal } from "../ui/modals/trakt-auth-modal";
 import { NotificationHistoryModal } from "../ui/modals/notification-history-modal";
+import { MediaVaultImportExportModal } from "../ui/modals/mediavault-import-export-modal";
+import { InfoModal } from "../ui/modals/info-modal";
 import { disconnectTrakt } from "../services/trakt-token";
 import { i18n, t } from "../i18n";
 import { SUPPORTED_LOCALES, Locale } from "../i18n/types";
@@ -17,6 +25,39 @@ import { TMDB_LANGUAGES } from "../api/tmdb-languages";
 import { resolveTmdbLanguage } from "../api/tmdb";
 import { makeClearable } from "../ui/components/clearable-input";
 import { FactoryResetModal } from "../ui/modals/factory-reset-modal";
+
+const OPTIONAL_PROPERTY_CATALOG: {
+  key: NoteTemplateOptionalPropertyKey;
+  nameKey: string;
+}[] = [
+  { key: "genres", nameKey: "settings.noteTemplatePropGenres" },
+  { key: "status", nameKey: "settings.noteTemplatePropStatus" },
+  { key: "rating_avg", nameKey: "settings.noteTemplatePropRatingAvg" },
+  { key: "watch_count", nameKey: "settings.noteTemplatePropWatchCount" },
+  // { key: "synopsis", nameKey: "settings.noteTemplatePropSynopsis" },
+  { key: "platform", nameKey: "settings.noteTemplatePropPlatform" },
+  { key: "release_date", nameKey: "settings.noteTemplatePropReleaseDate" },
+  { key: "runtime", nameKey: "settings.noteTemplatePropRuntime" },
+  // { key: "cast", nameKey: "settings.noteTemplatePropCast" },
+  { key: "director", nameKey: "settings.noteTemplatePropDirector" },
+  { key: "producer", nameKey: "settings.noteTemplatePropProducer" },
+  { key: "studios", nameKey: "settings.noteTemplatePropStudios" },
+  { key: "country", nameKey: "settings.noteTemplatePropCountry" },
+  // { key: "language", nameKey: "settings.noteTemplatePropLanguage" },
+  { key: "poster", nameKey: "settings.noteTemplatePropPoster" },
+  { key: "backdrop", nameKey: "settings.noteTemplatePropBackdrop" },
+  { key: "tmdb_url", nameKey: "settings.noteTemplatePropTmdbUrl" },
+];
+
+const SECTION_CATALOG: { key: NoteTemplateSectionKey; nameKey: string }[] = [
+  { key: "genreTags", nameKey: "settings.noteTemplateSectionGenreTags" },
+  { key: "synopsis", nameKey: "settings.noteTemplatePropSynopsis" },
+  { key: "cast", nameKey: "settings.noteTemplatePropCast" },
+  { key: "directors", nameKey: "settings.noteTemplateSectionDirectors" },
+  { key: "producers", nameKey: "settings.noteTemplateSectionProducers" },
+  { key: "crew", nameKey: "settings.noteTemplateSectionCrew" },
+  { key: "watchHistory", nameKey: "settings.noteTemplateSectionWatchHistory" },
+];
 
 export class MediaVaultSettingTab extends PluginSettingTab {
   plugin: MediaVaultPlugin;
@@ -74,7 +115,7 @@ export class MediaVaultSettingTab extends PluginSettingTab {
         },
       },
       {
-        name: t("settings.language"),
+        name: t("settings.displayLanguage"),
         desc: t("settings.languageDesc"),
         render: (setting) => {
           const options: Record<string, string> = {};
@@ -98,7 +139,7 @@ export class MediaVaultSettingTab extends PluginSettingTab {
         },
       },
       {
-        name: t("settings.tmdbApiKey"),
+        name: t("settings.apiKey"),
         desc: t("settings.tmdbApiKeyDesc"),
         render: (setting) => {
           setting.addText((text) => {
@@ -181,6 +222,21 @@ export class MediaVaultSettingTab extends PluginSettingTab {
               .setValue(settings.get().showAdultContent)
               .onChange(async (value) => {
                 await settings.update({ showAdultContent: value });
+              }),
+          );
+        },
+      },
+      {
+        name: t("settings.showLibraryCarousels"),
+        desc: t("settings.showLibraryCarouselsDesc"),
+        render: (setting) => {
+          setting.addToggle((toggle) =>
+            toggle
+              .setValue(settings.get().showLibraryCarousels)
+              .onChange(async (value) => {
+                await settings.update({ showLibraryCarousels: value });
+
+                this.plugin.refreshLibraryViews();
               }),
           );
         },
@@ -398,12 +454,160 @@ export class MediaVaultSettingTab extends PluginSettingTab {
         name: t("settings.autoCreateNotes"),
         desc: t("settings.autoCreateNotesDesc"),
         render: (setting) => {
+          const infoBtn = setting.controlEl.createEl("button", {
+            cls: "clickable-icon mediavault-info-icon-btn",
+            attr: { "aria-label": t("settings.dataPreservationInfoTitle") },
+          });
+          setIcon(infoBtn, "info");
+          infoBtn.addEventListener("click", () => {
+            new InfoModal(
+              this.app,
+              t("settings.dataPreservationInfoTitle"),
+              t("settings.dataPreservationInfoBody"),
+            ).open();
+          });
+
           setting.addToggle((toggle) =>
             toggle
               .setValue(settings.get().autoCreateNotes)
               .onChange(async (value) => {
                 await settings.update({ autoCreateNotes: value });
               }),
+          );
+        },
+      },
+      {
+        name: t("settings.generateAllNotes"),
+        desc: t("settings.generateAllNotesDesc"),
+        render: (setting) => {
+          setting.addButton((btn) =>
+            btn.setButtonText(t("settings.generateAllNotes")).onClick(async () => {
+              await this.plugin.regenerateAllNotes();
+            }),
+          );
+        },
+      },
+
+      {
+        name: t("settings.noteTemplateSection"),
+        render: (setting) => {
+          setting.setHeading();
+        },
+      },
+      {
+        name: t("settings.noteTemplateRequiredProperties"),
+        desc: `${t("settings.noteTemplateRequiredPropertiesDesc")} (type, title, tmdb_id, year)`,
+        render: () => {
+          // Nothing to toggle here
+        },
+      },
+      ...OPTIONAL_PROPERTY_CATALOG.map(
+        ({ key, nameKey }): SettingDefinitionItem => ({
+          name: t(nameKey),
+          desc: t("settings.noteTemplatePropertyDesc"),
+          render: (setting) => {
+            setting.addToggle((toggle) =>
+              toggle
+                .setValue(settings.get().noteTemplate.optionalProperties[key])
+                .onChange(async (value) => {
+                  await settings.update({
+                    noteTemplate: {
+                      ...settings.get().noteTemplate,
+                      optionalProperties: {
+                        ...settings.get().noteTemplate.optionalProperties,
+                        [key]: value,
+                      },
+                    },
+                  });
+                }),
+            );
+          },
+        }),
+      ),
+      {
+        name: t("settings.noteTemplateSections"),
+        render: (setting) => {
+          setting.setHeading();
+        },
+      },
+      ...SECTION_CATALOG.map(
+        ({ key, nameKey }): SettingDefinitionItem => ({
+          name: t(nameKey),
+          desc: t("settings.noteTemplateSectionDesc"),
+          render: (setting) => {
+            setting.addToggle((toggle) =>
+              toggle
+                .setValue(settings.get().noteTemplate.sections[key])
+                .onChange(async (value) => {
+                  await settings.update({
+                    noteTemplate: {
+                      ...settings.get().noteTemplate,
+                      sections: {
+                        ...settings.get().noteTemplate.sections,
+                        [key]: value,
+                      },
+                    },
+                  });
+                }),
+            );
+          },
+        }),
+      ),
+      {
+        name: t("exportImport.settingName"),
+        desc: t("exportImport.settingDesc"),
+        render: (setting) => {
+          setting.addButton((btn) =>
+            btn.setButtonText(t("command.exportLibrary")).onClick(async () => {
+              await this.plugin.runExportLibrary();
+            }),
+          );
+          setting.addButton((btn) =>
+            btn
+              .setButtonText(t("command.importMediaVaultExport"))
+              .onClick(() => {
+                new MediaVaultImportExportModal(
+                  this.app,
+                  this.plugin.storage,
+                  () => {
+                    this.plugin.refreshLibraryViews();
+                    this.plugin.refreshListViews();
+                  },
+                ).open();
+              }),
+          );
+        },
+      },
+      {
+        name: t("noteSync.settingName"),
+        desc: t("noteSync.settingDesc"),
+        render: (setting) => {
+          const state = settings.get().noteSyncState;
+          setting.setDesc(
+            state.lastSuccessfulSyncAt
+              ? t("noteSync.lastSynced", { date: state.lastSuccessfulSyncAt })
+              : t("noteSync.neverSynced"),
+          );
+          setting.addButton((btn) =>
+            btn.setButtonText(t("noteSync.syncNow")).onClick(async () => {
+              await this.plugin.runManualNoteSync();
+              this.update();
+            }),
+          );
+        },
+      },
+      {
+        name: t("settings.noteTemplateReset"),
+        desc: t("settings.noteTemplateResetDesc"),
+        render: (setting) => {
+          setting.addButton((btn) =>
+            btn.setButtonText(t("settings.noteTemplateReset")).onClick(async () => {
+              await settings.update({
+                noteTemplate: DEFAULT_SETTINGS.noteTemplate,
+              });
+              new Notice(t("settings.noteTemplateResetComplete"));
+              this.update();
+            }),
           );
         },
       },

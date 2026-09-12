@@ -311,3 +311,29 @@ export interface TMDBPersonDetails {
   knownFor: TMDBFilmographyItem[];
 }
 
+export interface TMDBRawWatchProviderEntry {
+  provider_id: number;
+  provider_name: string;
+  logo_path: string | null;
+  display_priority?: number;
+}
+
+export interface TMDBRawWatchProviderRegion {
+  link?: string;
+  flatrate?: TMDBRawWatchProviderEntry[];
+  rent?: TMDBRawWatchProviderEntry[];
+  buy?: TMDBRawWatchProviderEntry[];
+  ads?: TMDBRawWatchProviderEntry[];
+  free?: TMDBRawWatchProviderEntry[];
+}
+
+export interface TMDBRawWatchProvidersResponse {
+  id: number;
+  results: Record<string, TMDBRawWatchProviderRegion>;
+}
+
+export interface TMDBWatchProviderOption {
+  providerId: number;
+  name: string;
+  logoPath: string | null;
+}

@@ -3,7 +3,7 @@ import type { Chart } from "chart.js";
 import type MediaVaultPlugin from "../../main";
 import { VIEW_TYPE_ANALYTICS } from "../../constants";
 import { computeAnalyticsMemoized } from "../../services/analytics/memoized";
-import { t } from "../../i18n";
+import { t, tPlural } from "../../i18n";
 import {
   createChart,
   CHART_PALETTE,
@@ -13,6 +13,8 @@ import {
   computeDailyWatchCounts,
   renderCalendarHeatmap,
 } from "../components/heatmap";
+import { ActorDetailsModal } from "../modals/actor-details-modal";
+import type { CountItem } from "../../services/analytics/types";
 
 export class AnalyticsView extends ItemView {
   private plugin: MediaVaultPlugin;
@@ -81,10 +83,13 @@ export class AnalyticsView extends ItemView {
 
     const headline = root.createDiv({ cls: "mediavault-analytics-headline" });
     headline.createDiv({
-      text: t("analytics.moviesEpisodesWatchedLine", {
-        movies: stats.moviesWatchedCount,
-        episodes: stats.episodesWatchedCount,
-      }),
+      text: [
+        tPlural("analytics.moviesCountLabel", stats.moviesWatchedCount),
+        tPlural(
+          "analytics.episodesWatchedCountLabel",
+          stats.episodesWatchedCount,
+        ),
+      ].join(" · "),
     });
     headline.createDiv({
       cls: "mediavault-analytics-subline",
@@ -185,34 +190,30 @@ export class AnalyticsView extends ItemView {
     }
 
     if (stats.topActors.length > 0) {
-      const card = this.chartCard(grid, t("analytics.topActorsCard"));
-      const colors = themeColors();
-      const chart = createChart(
-        card,
-        "bar",
-        {
-          labels: stats.topActors.map((a) => a.label),
-          datasets: [
-            {
-              data: stats.topActors.map((a) => a.count),
-              backgroundColor: CHART_PALETTE[2],
-            },
-          ],
-        },
-        {
-          indexAxis: "y",
-          plugins: { legend: { display: false } },
-          scales: {
-            x: {
-              ticks: { color: colors.muted },
-              grid: { color: colors.border },
-              beginAtZero: true,
-            },
-            y: { ticks: { color: colors.muted }, grid: { display: false } },
-          },
-        },
+      this.renderPeopleChart(
+        grid,
+        t("analytics.topActorsCard"),
+        stats.topActors,
+        CHART_PALETTE[2],
       );
-      this.activeCharts.push(chart);
+    }
+
+    if (stats.topDirectors.length > 0) {
+      this.renderPeopleChart(
+        grid,
+        t("analytics.topDirectors"),
+        stats.topDirectors,
+        CHART_PALETTE[3],
+      );
+    }
+
+    if (stats.topProducers.length > 0) {
+      this.renderPeopleChart(
+        grid,
+        t("analytics.topProducers"),
+        stats.topProducers,
+        CHART_PALETTE[4],
+      );
     }
 
     const heatmapSection = root.createDiv({
@@ -227,6 +228,62 @@ export class AnalyticsView extends ItemView {
       dailyCounts,
       new Date().getFullYear(),
     );
+  }
+
+  private renderPeopleChart(
+    grid: HTMLElement,
+    title: string,
+    items: CountItem[],
+    color: string,
+  ): void {
+    const card = this.chartCard(grid, title);
+    card.addClass("mediavault-analytics-clickable-chart");
+    const colors = themeColors();
+    const chart = createChart(
+      card,
+      "bar",
+      {
+        labels: items.map((a) => a.label),
+        datasets: [
+          {
+            data: items.map((a) => a.count),
+            backgroundColor: color,
+          },
+        ],
+      },
+      {
+        indexAxis: "y",
+        plugins: { legend: { display: false } },
+        scales: {
+          x: {
+            ticks: { color: colors.muted },
+            grid: { color: colors.border },
+            beginAtZero: true,
+          },
+          y: { ticks: { color: colors.muted }, grid: { display: false } },
+        },
+        onHover: (evt: unknown, elements: unknown[]) => {
+          const canvas = (evt as { native?: { target?: HTMLElement } })
+            ?.native?.target;
+          if (canvas) {
+            canvas.style.cursor =
+              elements.length > 0 ? "pointer" : "default";
+          }
+        },
+        onClick: (_evt: unknown, elements: { index: number }[]) => {
+          if (elements.length === 0) return;
+          const item = items[elements[0].index];
+          if (!item || !item.tmdbPersonId) return;
+          new ActorDetailsModal(
+            this.plugin.app,
+            this.plugin.storage,
+            this.plugin.tmdb,
+            item.tmdbPersonId,
+          ).open();
+        },
+      },
+    );
+    this.activeCharts.push(chart);
   }
 
   private chartCard(container: HTMLElement, title: string): HTMLElement {

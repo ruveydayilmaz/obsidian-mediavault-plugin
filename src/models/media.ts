@@ -55,6 +55,8 @@ export interface MediaItem {
 
   tvStatus: string | null;
 
+  platform: string | null;
+
   notes: string;
 
   tags: string[];

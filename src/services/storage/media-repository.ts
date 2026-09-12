@@ -5,6 +5,7 @@ import { MediaStatus, MediaType } from "../../types/enums";
 import { MediaVaultId } from "../../types/common";
 
 export class MediaRepository extends BaseRepository<MediaItem> {
+  onUpdated?: (id: MediaVaultId) => void;
   private tmdbIndexCache = { version: -1, map: new Map<string, MediaItem[]>() };
   private tvdbIndexCache = { version: -1, map: new Map<string, MediaItem[]>() };
   private imdbIndexCache = { version: -1, map: new Map<string, MediaItem[]>() };
@@ -39,6 +40,7 @@ export class MediaRepository extends BaseRepository<MediaItem> {
       status: MediaStatus.PlanToWatch,
       droppedReason: null,
       tvStatus: null,
+      platform: null,
       isFavorite: false,
       liked: false,
       likedAt: null,
@@ -62,7 +64,12 @@ export class MediaRepository extends BaseRepository<MediaItem> {
     id: MediaVaultId,
     patch: Partial<MediaItem>,
   ): Promise<MediaItem | null> {
-    return super.update(id, { ...patch, updatedAt: new Date().toISOString() });
+    const result = await super.update(id, {
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    });
+    if (result) this.onUpdated?.(id);
+    return result;
   }
 
   async findByTmdbId(

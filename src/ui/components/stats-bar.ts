@@ -2,7 +2,7 @@ import {
   DashboardStatistics,
   formatWatchTime,
 } from "../../services/statistics-service";
-import { t } from "../../i18n";
+import { t, tPlural } from "../../i18n";
 
 interface StatCardRefs {
   valueEl: HTMLElement;
@@ -58,11 +58,13 @@ export class StatsBar {
       );
 
       this.mobileRefs.movieCount.setText(
-        t("stats.moviesWatchedLabel", { count: stats.movieCount.toLocaleString() }),
+        tPlural("stats.moviesWatchedLabel", stats.movieCount, {
+          count: stats.movieCount.toLocaleString(),
+        }),
       );
 
       this.mobileRefs.episodeCount.setText(
-        t("stats.episodesWatchedLabel", {
+        tPlural("stats.episodesWatchedLabel", stats.episodeCount, {
           count: stats.episodeCount.toLocaleString(),
         }),
       );

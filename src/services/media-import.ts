@@ -43,6 +43,7 @@ export function buildMediaItemFromTMDB(
     status: MediaStatus.PlanToWatch,
     droppedReason: null,
     tvStatus: details.tvStatus ?? null,
+    platform: null,
     isFavorite: false,
     liked: false,
     likedAt: null,

@@ -3,7 +3,9 @@ import { renderModalHeader } from "./modal-chrome";
 import type { StorageService } from "../../services/storage";
 import { computeAnalyticsMemoized } from "../../services/analytics/memoized";
 import { CountItem } from "../../services/analytics/types";
-import { t, i18n } from "../../i18n";
+import { t, tPlural, i18n } from "../../i18n";
+import type { TMDBService } from "../../api/tmdb";
+import { ActorDetailsModal } from "./actor-details-modal";
 
 function formatRuntime(minutes: number): string {
   return i18n.formatRuntime(minutes);
@@ -11,10 +13,12 @@ function formatRuntime(minutes: number): string {
 
 export class AnalyticsSummaryModal extends Modal {
   private storage: StorageService;
+  private tmdb: TMDBService;
 
-  constructor(app: App, storage: StorageService) {
+  constructor(app: App, storage: StorageService, tmdb: TMDBService) {
     super(app);
     this.storage = storage;
+    this.tmdb = tmdb;
   }
 
   async onOpen(): Promise<void> {
@@ -45,11 +49,11 @@ export class AnalyticsSummaryModal extends Modal {
     });
     headline.createDiv({
       cls: "mediavault-analytics-subline",
-      text: t("analytics.subline", {
-        movies: stats.moviesWatchedCount,
-        episodes: stats.episodesWatchedCount,
-        rewatches: stats.rewatchCount,
-      }),
+      text: [
+        tPlural("analytics.moviesCountLabel", stats.moviesWatchedCount),
+        tPlural("analytics.episodesCountLabel", stats.episodesWatchedCount),
+        tPlural("analytics.rewatchesCountLabel", stats.rewatchCount),
+      ].join(" · "),
     });
 
     const grid = contentEl.createDiv({ cls: "mediavault-analytics-grid" });
@@ -73,6 +77,11 @@ export class AnalyticsSummaryModal extends Modal {
       contentEl,
       t("analytics.topDirectors"),
       stats.topDirectors,
+    );
+    this.renderTopList(
+      contentEl,
+      t("analytics.topProducers"),
+      stats.topProducers,
     );
     this.renderTopList(contentEl, t("analytics.topStudios"), stats.topStudios);
 
@@ -121,7 +130,28 @@ export class AnalyticsSummaryModal extends Modal {
     const list = container.createDiv({ cls: "mediavault-analytics-toplist" });
     items.slice(0, 5).forEach((item) => {
       const row = list.createDiv({ cls: "mediavault-analytics-toplist-row" });
-      row.createSpan({ text: item.label });
+      const labelEl = row.createSpan({ text: item.label });
+      if (item.tmdbPersonId) {
+        row.addClass("mediavault-analytics-toplist-row-clickable");
+        labelEl.addClass("mediavault-analytics-toplist-label-link");
+        row.setAttr("tabindex", "0");
+        row.setAttr("role", "button");
+        const openPerson = (): void => {
+          new ActorDetailsModal(
+            this.app,
+            this.storage,
+            this.tmdb,
+            item.tmdbPersonId as number,
+          ).open();
+        };
+        row.addEventListener("click", openPerson);
+        row.addEventListener("keydown", (evt: KeyboardEvent) => {
+          if (evt.key === "Enter" || evt.key === " ") {
+            evt.preventDefault();
+            openPerson();
+          }
+        });
+      }
       row.createSpan({
         cls: "mediavault-analytics-toplist-count",
         text: String(item.count),

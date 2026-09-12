@@ -36,8 +36,10 @@ stored directly inside your vault.
 - **Analytics**: genre/actor/studio breakdowns, watch trends, calendar heatmap
 - **Comfort Finder**: mood-based filtering (energy, attention, heaviness, tags) with presets
 - **Recommendations**: TMDB discovery scored against your taste, plus comfort-based picks from your own library
-- **i18n**: English and Turkish, with all UI strings routed through a shared locale system
+* **i18n**: Supports 7+ languages. Translations are machine-generated and may contain errors.
 - **Theme Support**: MediaVault automatically detects themes installed in Obsidian, giving you hundreds of themes to choose from. Some themes may not be fully compatible with the plugin.
+
+> Please check the **Settings** to explore the different customization options available.
 
 ## MediaVault Setup Roadmap
 
