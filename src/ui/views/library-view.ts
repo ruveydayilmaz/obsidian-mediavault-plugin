@@ -179,7 +179,7 @@ export class LibraryView extends ItemView {
     this.resizeObserver = new ResizeObserver((entries) => {
       const width = entries[0]?.contentRect.width ?? root.clientWidth;
 
-      this.updateToolbarWrapState();
+      this.scheduleLayoutSync();
 
       const nextFavoritesCount = Platform.isMobile
         ? mobileGridColumnCount()
@@ -209,6 +209,10 @@ export class LibraryView extends ItemView {
 
   async onClose(): Promise<void> {
     this.resizeObserver?.disconnect();
+    if (this.layoutFrame !== null) {
+      window.cancelAnimationFrame(this.layoutFrame);
+      this.layoutFrame = null;
+    }
     this.clearPendingMinHeightCollapse();
   }
 
@@ -245,6 +249,43 @@ export class LibraryView extends ItemView {
       : [];
 
     await Promise.all([this.refreshStats(), ...carouselRefreshes]);
+  }
+
+  private layoutFrame: number | null = null;
+
+  private scheduleLayoutSync(): void {
+    if (this.layoutFrame !== null) return;
+    this.layoutFrame = window.requestAnimationFrame(() => {
+      this.layoutFrame = null;
+      this.applyLayoutSync();
+    });
+  }
+
+  private applyLayoutSync(): void {
+    let wrapped: boolean | null = null;
+    if (this.toolbarSearchEl && this.toolbarActionsEl && this.viewRoot) {
+      const searchTop = this.toolbarSearchEl.getBoundingClientRect().top;
+      const actionsTop = this.toolbarActionsEl.getBoundingClientRect().top;
+      wrapped = Math.round(actionsTop) > Math.round(searchTop) + 1;
+    }
+
+    let posterHeight: number | null = null;
+    if (!Platform.isMobile) {
+      const poster = this.favoritesEl.querySelector<HTMLElement>(
+        ".mediavault-favorite-poster",
+      );
+      posterHeight = poster ? poster.getBoundingClientRect().height : 0;
+    }
+
+    if (wrapped !== null) {
+      this.viewRoot.toggleClass("mediavault-toolbar-wrapped", wrapped);
+    }
+    if (posterHeight !== null) {
+      this.parentEl.setCssProps({
+        "--mediavault-fav-poster-h":
+          posterHeight > 0 ? `${posterHeight}px` : "",
+      });
+    }
   }
 
   private applyCarouselVisibility(): void {
@@ -300,6 +341,7 @@ export class LibraryView extends ItemView {
         void this.openFavoriteList(tab);
       },
     );
+    this.scheduleLayoutSync();
   }
 
   private async openFavoriteList(tab: "movies" | "shows"): Promise<void> {
@@ -336,6 +378,7 @@ export class LibraryView extends ItemView {
         void this.plugin.activateListsView();
       },
     );
+    this.scheduleLayoutSync();
   }
 
   private renderTabs(all: MediaItem[]): void {
@@ -984,16 +1027,7 @@ export class LibraryView extends ItemView {
     });
     this.renderViewToggle();
 
-    window.requestAnimationFrame(() => this.updateToolbarWrapState());
-  }
-
-  private updateToolbarWrapState(): void {
-    if (!this.toolbarSearchEl || !this.toolbarActionsEl || !this.viewRoot)
-      return;
-    const searchTop = this.toolbarSearchEl.getBoundingClientRect().top;
-    const actionsTop = this.toolbarActionsEl.getBoundingClientRect().top;
-    const wrapped = Math.round(actionsTop) > Math.round(searchTop) + 1;
-    this.viewRoot.toggleClass("mediavault-toolbar-wrapped", wrapped);
+    this.scheduleLayoutSync();
   }
 
   private renderSortControls(container: HTMLElement): void {

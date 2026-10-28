@@ -61,7 +61,7 @@ export class StatisticsService {
   private async load(): Promise<StatisticsInput> {
     const [media, sessions, episodes, episodeProgress] = await Promise.all([
       this.storage.media.getAll(),
-      this.storage.watchSessions.getAll(),
+      this.storage.watchSessions.findWhere((s) => !s.inProgress),
       this.storage.episodes.getAll(),
       this.storage.episodeProgress.getAll(),
     ]);

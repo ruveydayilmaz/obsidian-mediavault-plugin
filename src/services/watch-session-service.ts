@@ -19,6 +19,7 @@ export async function addWatchSession(
     mediaId: input.mediaId,
     watchDate: input.watchDate,
     completedDate: input.completedDate ?? null,
+    ...(input.inProgress ? { inProgress: true } : {}),
     rating: input.rating ?? null,
     review: input.review ?? "",
     mood: input.mood ?? null,
@@ -48,6 +49,7 @@ export async function updateWatchSession(
       WatchSession,
       | "watchDate"
       | "completedDate"
+      | "inProgress"
       | "rating"
       | "review"
       | "mood"
@@ -102,9 +104,11 @@ export async function syncMediaAggregates(
   const sessions = await storage.watchSessions.findWhere(
     (s) => s.mediaId === mediaId,
   );
+
+  const completed = sessions.filter((s) => !s.inProgress);
   await storage.media.update(mediaId, {
     averageRating: computeAverageRating(sessions),
-    watchCount: sessions.length,
+    watchCount: completed.length,
     lastWatchedDate:
       sessions.length > 0
         ? sessions.reduce(
@@ -114,4 +118,84 @@ export async function syncMediaAggregates(
         : null,
   });
   await touchMediaActivity(storage, mediaId, activityAt);
+}
+
+type SeriesCompletedListener = (session: WatchSession) => void;
+const seriesCompletedListeners = new Set<SeriesCompletedListener>();
+
+export function onSeriesWatchCompleted(
+  listener: SeriesCompletedListener,
+): () => void {
+  seriesCompletedListeners.add(listener);
+  return () => seriesCompletedListeners.delete(listener);
+}
+
+function emitSeriesCompleted(session: WatchSession): void {
+  seriesCompletedListeners.forEach((l) => {
+    try {
+      l(session);
+    } catch (err) {
+      console.warn("MediaVault: series-completed listener failed", err);
+    }
+  });
+}
+
+export async function ensureSeriesWatchStarted(
+  storage: StorageService,
+  mediaId: string,
+  watchedDate: string,
+): Promise<void> {
+  const existing = await storage.watchSessions.findWhere(
+    (s) => s.mediaId === mediaId && s.episodeId === null,
+  );
+  if (existing.length > 0) return;
+
+  const watched = (await storage.episodeProgress.findByMediaId(mediaId))
+    .filter((p) => p.watched && p.watchedDate)
+    .map((p) => p.watchedDate as string);
+  const start = [watchedDate, ...watched].reduce((a, b) => (b < a ? b : a));
+
+  await addWatchSession(storage, {
+    mediaId,
+    watchDate: start.slice(0, 10),
+    inProgress: true,
+    completedDate: null,
+  });
+}
+
+export async function completeSeriesWatch(
+  storage: StorageService,
+  mediaId: string,
+  endDate: string,
+  opts: { silent?: boolean } = {},
+): Promise<WatchSession | null> {
+  const sessions = await storage.watchSessions.findWhere(
+    (s) => s.mediaId === mediaId && s.episodeId === null,
+  );
+  const open = sessions
+    .filter((s) => s.inProgress)
+    .sort((a, b) => a.watchDate.localeCompare(b.watchDate))
+    .pop();
+  const end = endDate.slice(0, 10);
+
+  let result: WatchSession | null = null;
+  if (open) {
+    const start = open.watchDate;
+    result = await updateWatchSession(storage, open.id, {
+      completedDate: end < start ? start : end,
+      inProgress: false,
+    });
+  } else if (sessions.length === 0) {
+    const watched = (await storage.episodeProgress.findByMediaId(mediaId))
+      .filter((p) => p.watched && p.watchedDate)
+      .map((p) => p.watchedDate as string);
+    const start = [end, ...watched].reduce((a, b) => (b < a ? b : a));
+    result = await addWatchSession(storage, {
+      mediaId,
+      watchDate: start.slice(0, 10),
+      completedDate: end,
+    });
+  }
+  if (result && !opts.silent) emitSeriesCompleted(result);
+  return result;
 }

@@ -1,5 +1,6 @@
 import { StorageAdapter } from "./storage-adapter";
 import { MediaVaultSettings, DEFAULT_SETTINGS } from "../../settings/settings";
+import { normalizeSafeFolderPath } from "../../utils/vault-path";
 
 function mergeSettings(
   base: Partial<MediaVaultSettings> | undefined,
@@ -18,6 +19,9 @@ function mergeSettings(
       ...base?.noteTemplate?.sections,
     },
   };
+  merged.mediaFolderPath =
+    normalizeSafeFolderPath(merged.mediaFolderPath) ??
+    DEFAULT_SETTINGS.mediaFolderPath;
   merged.noteSyncState = {
     ...DEFAULT_SETTINGS.noteSyncState,
     ...base?.noteSyncState,

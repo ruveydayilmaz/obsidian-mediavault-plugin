@@ -6,7 +6,8 @@ import type { WatchSession } from "../models/review";
 import type { Episode, EpisodeProgress, EpisodeWatch } from "../models/episode";
 import type { ComfortProfile, ComfortPreset } from "../models/comfort";
 import type { CustomList } from "../models/list";
-import type { MediaVaultSettings } from "../settings/settings";
+import { DEFAULT_SETTINGS, type MediaVaultSettings } from "../settings/settings";
+import { normalizeSafeFolderPath } from "../utils/vault-path";
 import { MediaStatus } from "../types/enums";
 import { MediaType } from "../types/enums";
 import {
@@ -90,6 +91,17 @@ export async function applySettingsImport(
   for (const key of SETTINGS_EXPORT_WHITELIST) {
     const value = settingsExport.settings[key];
     if (value === undefined) continue;
+    const fallback: unknown = DEFAULT_SETTINGS[key];
+    if (fallback !== null && typeof value !== typeof fallback) continue;
+    if (Array.isArray(fallback) !== Array.isArray(value)) continue;
+    if (key === "mediaFolderPath") {
+      const safe =
+        typeof value === "string" ? normalizeSafeFolderPath(value) : null;
+      if (safe === null) continue;
+      (patch as Record<string, unknown>)[key] = safe;
+      count++;
+      continue;
+    }
     (patch as Record<string, unknown>)[key] = value;
     count++;
   }
@@ -829,7 +841,7 @@ export async function importMediaVaultExport(
         continue;
       }
 
-      await storage.media.save(item.media);
+      await storage.media.save({ ...item.media, notePath: null });
       await Promise.all([
         ...item.episodes.map((e) => storage.episodes.save(e)),
         ...(categories.includeWatchHistory

@@ -9,4 +9,4 @@ export const VIEW_TYPE_EXPLORE = "mediavault-explore-view";
 
 export const RIBBON_ICON = "clapperboard";
 
-export const DEFAULT_DATA_VERSION = 6;
+export const DEFAULT_DATA_VERSION = 7;

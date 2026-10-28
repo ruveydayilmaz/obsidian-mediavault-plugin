@@ -8,6 +8,38 @@ export function applyAndroidBodyClass(): void {
   document.body.classList.toggle("mediavault-android", isAndroidDevice());
 }
 
+export function isWebClient(): boolean {
+  return !Platform.isDesktopApp && !Platform.isMobileApp;
+}
+
+export function applyWebBodyClass(): void {
+  document.body.classList.toggle("mediavault-web", isWebClient());
+}
+
+export function removeWebBodyClass(): void {
+  document.body.classList.remove("mediavault-web");
+}
+
+export const ANDROID_MENU_OFFSET_MIN = -40;
+export const ANDROID_MENU_OFFSET_MAX = 40;
+export const ANDROID_MENU_OFFSET_STEP = 2;
+
+export function clampAndroidMenuOffset(value: unknown): number {
+  const n = typeof value === "number" && Number.isFinite(value) ? value : 0;
+  return Math.max(
+    ANDROID_MENU_OFFSET_MIN,
+    Math.min(ANDROID_MENU_OFFSET_MAX, Math.round(n)),
+  );
+}
+
+export function applyAndroidMenuOffset(value: unknown): void {
+  if (!Platform.isMobile) return;
+  document.body.style.setProperty(
+    "--mediavault-android-menu-offset",
+    `${clampAndroidMenuOffset(value)}px`,
+  );
+}
+
 let androidSafeAreaCleanup: (() => void) | null = null;
 
 function ensureViewportFitCover(): void {
@@ -234,6 +266,7 @@ export function setupAndroidSafeArea(app?: App): void {
     document.body.style.removeProperty("--mediavault-android-bottom-inset");
     document.body.style.removeProperty("--mediavault-android-toolbar-inset");
     document.body.style.removeProperty("--mediavault-android-top-inset");
+    document.body.style.removeProperty("--mediavault-android-menu-offset");
     topInsetSentinel?.remove();
     topInsetSentinel = null;
   };

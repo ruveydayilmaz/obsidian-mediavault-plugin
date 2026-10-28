@@ -13,8 +13,6 @@ export function statusLabel(status: MediaStatus): string {
       return t("status.completed");
     case MediaStatus.WaitingForNewSeason:
       return t("status.waiting_for_new_season");
-    case MediaStatus.UpToDate:
-      return t("status.up_to_date");
     case MediaStatus.OnHold:
       return t("status.on_hold");
     case MediaStatus.Dropped:

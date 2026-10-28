@@ -69,6 +69,17 @@ const migrations: Record<number, Migration> = {
         }))
       : [],
   }),
+
+  6: (data) => ({
+    ...data,
+    media: Array.isArray(data.media)
+      ? (data.media as Record<string, unknown>[]).map((m) =>
+          m.status === "up_to_date"
+            ? { ...m, status: "waiting_for_new_season" }
+            : m,
+        )
+      : [],
+  }),
 };
 
 function withDefaultsApplied(data: Record<string, unknown>): VaultData {

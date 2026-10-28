@@ -9,10 +9,9 @@ const SELECTABLE_STATUSES: MediaStatus[] = [
   MediaStatus.PlanToWatch,
   MediaStatus.Watching,
   MediaStatus.OnHold,
-  // MediaStatus.WatchLater,
+  MediaStatus.WatchLater,
   MediaStatus.Completed,
   MediaStatus.WaitingForNewSeason,
-  MediaStatus.UpToDate,
   MediaStatus.Dropped,
 ];
 

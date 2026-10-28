@@ -5,7 +5,14 @@ import { MediaType } from "../../types/enums";
 import { NoteTemplateSettings } from "../../settings/settings";
 import { CREW_ROLE_JOBS, tmdbImageUrl } from "../../api/tmdb-normalize";
 
-const REQUIRED_FRONTMATTER_KEYS = ["type", "title", "year", "tmdb_id"];
+const REQUIRED_FRONTMATTER_KEYS = [
+  "mediavault_id",
+  "mediavault_updated_at",
+  "type",
+  "title",
+  "year",
+  "tmdb_id",
+];
 const COMFORT_FRONTMATTER_KEYS = [
   "comfort_score",
   "energy_level",
@@ -27,6 +34,8 @@ export function buildMediaFrontmatterData(
   template: NoteTemplateSettings,
 ): FrontmatterData {
   const data: FrontmatterData = {
+    mediavault_id: media.id,
+    mediavault_updated_at: media.updatedAt,
     type: media.type === MediaType.Movie ? "movie" : "tv",
     title: media.title,
     year: media.year,

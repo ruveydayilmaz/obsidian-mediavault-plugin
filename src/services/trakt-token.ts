@@ -1,5 +1,8 @@
 import type { StorageService } from "./storage";
-import { refreshAccessToken } from "../api/trakt-auth";
+import {
+  refreshAccessToken,
+  TraktReconnectRequiredError,
+} from "../api/trakt-auth";
 
 const REFRESH_BUFFER_MS = 5 * 60 * 1000; // 5 min
 
@@ -17,11 +20,20 @@ export async function ensureValidTraktToken(
     return settings.traktAccessToken;
   }
 
-  const refreshed = await refreshAccessToken(
-    settings.traktClientId,
-    settings.traktClientSecret,
-    settings.traktRefreshToken,
-  );
+  let refreshed;
+  try {
+    refreshed = await refreshAccessToken(
+      settings.traktClientId,
+      settings.traktClientSecret,
+      settings.traktRefreshToken,
+    );
+  } catch (err) {
+    if (err instanceof TraktReconnectRequiredError) {
+      await disconnectTrakt(storage);
+      return null;
+    }
+    throw err;
+  }
 
   await storage.settings.update({
     traktAccessToken: refreshed.accessToken,

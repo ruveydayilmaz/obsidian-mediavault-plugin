@@ -28,7 +28,10 @@ export class CustomListRepository extends BaseRepository<CustomList> {
     id: MediaVaultId,
     patch: Partial<CustomList>,
   ): Promise<CustomList | null> {
-    return super.update(id, { ...patch, updatedAt: new Date().toISOString() });
+    return super.update(id, {
+      ...patch,
+      updatedAt: patch.updatedAt ?? new Date().toISOString(),
+    });
   }
 
   async duplicate(id: MediaVaultId): Promise<CustomList | null> {

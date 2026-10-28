@@ -1,13 +1,56 @@
 import type { App } from "obsidian";
 import { normalizePath } from "obsidian";
+import { isSafeVaultFilePath } from "../utils/vault-path";
 
 const LOCAL_IMAGE_PREFIX = "local:";
 const COVERS_SUBFOLDER = "Covers";
 
+const PRIVATE_IPV4 =
+  /^(0\.|10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/;
+
+function isPrivateHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
+  if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host.endsWith(".local") || host.endsWith(".internal")) return true;
+  if (host.endsWith(".lan") || host.endsWith(".home.arpa")) return true;
+  if (!host.includes(".") && !host.includes(":")) return true;
+  if (PRIVATE_IPV4.test(host)) return true;
+  if (host.includes(":")) {
+    return (
+      host === "::1" ||
+      host === "::" ||
+      host.startsWith("fc") ||
+      host.startsWith("fd") ||
+      host.startsWith("fe80") ||
+      host.startsWith("::ffff:")
+    );
+  }
+  return /^\d+$/.test(host) || /^0x[\da-f]+$/i.test(host);
+}
+
 export function isRemoteImageUrl(
   path: string | null | undefined,
+  opts: { httpsOnly?: boolean } = {},
 ): path is string {
-  return !!path && /^https?:\/\//i.test(path);
+  if (!path || path.length > 4096) return false;
+  let url: URL;
+  try {
+    url = new URL(path);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return false;
+  if (opts.httpsOnly && url.protocol !== "https:") return false;
+  if (url.username || url.password) return false;
+  return !isPrivateHost(url.hostname);
+}
+
+export function isSafeLocalImageVaultPath(vaultPath: string): boolean {
+  if (!isSafeVaultFilePath(vaultPath)) return false;
+  const segments = vaultPath.split("/");
+  if (!segments.slice(0, -1).includes(COVERS_SUBFOLDER)) return false;
+  const ext = /\.([a-zA-Z0-9]+)$/.exec(segments[segments.length - 1])?.[1];
+  return !!ext && ALLOWED_EXTENSIONS.includes(ext.toLowerCase());
 }
 
 const EXTENSION_BY_MIME: Record<string, string> = {
@@ -40,10 +83,13 @@ export function resolveMediaImageSrc(
   tmdbUrl: (path: string | null) => string | null,
 ): string | null {
   if (!path) return null;
-  if (isRemoteImageUrl(path)) return path;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(path) && !isLocalImagePath(path)) {
+    return isRemoteImageUrl(path) ? path : null;
+  }
   if (!isLocalImagePath(path)) return tmdbUrl(path);
   if (!appRef) return null;
   const vaultPath = localImageVaultPath(path);
+  if (!isSafeLocalImageVaultPath(vaultPath)) return null;
   try {
     return appRef.vault.adapter.getResourcePath(vaultPath);
   } catch {
@@ -135,6 +181,7 @@ export async function removeLocalImageIfAny(
 ): Promise<void> {
   if (!appRef || !isLocalImagePath(path)) return;
   const vaultPath = localImageVaultPath(path);
+  if (!isSafeLocalImageVaultPath(vaultPath)) return;
   const file = appRef.vault.getAbstractFileByPath(vaultPath);
   if (file) {
     await appRef.vault.adapter.remove(vaultPath).catch(() => {

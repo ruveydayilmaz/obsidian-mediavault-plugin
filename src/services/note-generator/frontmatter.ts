@@ -28,11 +28,39 @@ export function mergeFrontmatter(
 function needsQuoting(value: string): boolean {
   if (value === "") return true;
   return (
+    // eslint-disable-next-line no-control-regex -- control
+    /[\u0000-\u001f\u007f\u0085\u2028\u2029]/.test(value) ||
+    /^[-?:](\s|$)/.test(value) ||
+    /\s#/.test(value) ||
+    /:$/.test(value) ||
+    /^[-+]?(\d[\d_]*\.?\d*|\.\d+)([eE][-+]?\d+)?$/.test(value) ||
+    /^0[xob][\da-f]+$/i.test(value) ||
+    /^(yes|no|on|off|y|n)$/i.test(value) ||
     /^[<[\]{}#&*!|>'"%@`]/.test(value) ||
     /^(true|false|null|~)$/i.test(value) ||
     /:\s/.test(value) ||
-    /^\s|\s$/.test(value)
+    /^\s|\s$/.test(value) ||
+    /^\d{4}-\d{2}-\d{2}([T ]\d{2}:\d{2}|$)/.test(value)
   );
+}
+
+function escapeDoubleQuoted(value: string): string {
+  let out = "";
+  for (const ch of value) {
+    const code = ch.codePointAt(0) ?? 0;
+    if (ch === "\\") out += "\\\\";
+    else if (ch === '"') out += '\\"';
+    else if (ch === "\n") out += "\\n";
+    else if (ch === "\r") out += "\\r";
+    else if (ch === "\t") out += "\\t";
+    else if (code < 0x20 || code === 0x7f) {
+      out += `\\x${code.toString(16).padStart(2, "0")}`;
+    } else if (code === 0x85) out += "\\N";
+    else if (code === 0x2028) out += "\\L";
+    else if (code === 0x2029) out += "\\P";
+    else out += ch;
+  }
+  return out;
 }
 
 function serializeScalar(value: unknown): string {
@@ -41,7 +69,7 @@ function serializeScalar(value: unknown): string {
     return String(value);
   if (typeof value === "string") {
     if (needsQuoting(value)) {
-      return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+      return `"${escapeDoubleQuoted(value)}"`;
     }
     return value;
   }

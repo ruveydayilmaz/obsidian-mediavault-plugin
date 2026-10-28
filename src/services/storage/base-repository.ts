@@ -18,6 +18,8 @@ export abstract class BaseRepository<T extends HasId> {
   protected adapter: StorageAdapter;
   private collectionKey: keyof VaultData;
 
+  onMutated?: (record: T) => void;
+
   private version = 0;
   private idIndexVersion = -1;
   private idIndex: Map<MediaVaultId, T> = new Map();
@@ -29,6 +31,10 @@ export abstract class BaseRepository<T extends HasId> {
 
   protected getCollection(): T[] {
     return this.adapter.getData()[this.collectionKey] as unknown as T[];
+  }
+
+  invalidate(): void {
+    this.version++;
   }
 
   getVersion(): number {
@@ -80,7 +86,25 @@ export abstract class BaseRepository<T extends HasId> {
     this.version++;
 
     void this.adapter.requestSave();
+    this.onMutated?.(record);
     return record;
+  }
+
+  async upsertRaw(record: T): Promise<boolean> {
+    const collection = this.getCollection();
+    const index = collection.findIndex((item) => item.id === record.id);
+    if (index === -1) {
+      collection.push(record);
+    } else {
+      if (JSON.stringify(collection[index]) === JSON.stringify(record)) {
+        return false;
+      }
+      collection[index] = record;
+    }
+    this.version++;
+    void this.adapter.requestSave();
+    this.onMutated?.(record);
+    return true;
   }
 
   async update(id: MediaVaultId, patch: Partial<T>): Promise<T | null> {
@@ -92,6 +116,7 @@ export abstract class BaseRepository<T extends HasId> {
     collection[index] = updated;
     this.version++;
     void this.adapter.requestSave();
+    this.onMutated?.(updated);
     return updated;
   }
 
@@ -100,9 +125,10 @@ export abstract class BaseRepository<T extends HasId> {
     const index = collection.findIndex((item) => item.id === id);
     if (index === -1) return false;
 
-    collection.splice(index, 1);
+    const [removed] = collection.splice(index, 1);
     this.version++;
     void this.adapter.requestSave();
+    this.onMutated?.(removed);
     return true;
   }
 

@@ -23,7 +23,7 @@ export class TraktAuthModal extends Modal {
     renderModalHeader(this, contentEl, t("settings.connectTrakt"));
 
     const settings = this.storage.settings.get();
-    if (!settings.traktClientId || !settings.traktClientSecret) {
+    if (!settings.traktClientId) {
       contentEl.createDiv({
         text: t("settings.needClientCredentials"),
         cls: "mediavault-trakt-auth-error",

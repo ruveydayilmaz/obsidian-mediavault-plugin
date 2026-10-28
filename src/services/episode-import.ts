@@ -5,6 +5,7 @@ import { MediaItem } from "../models/media";
 import { MediaStatus } from "../types/enums";
 import { TMDBNormalizedEpisode } from "../types/tmdb";
 import { mapWithConcurrency } from "./importer/concurrency";
+import { recalculateAndPersistStatus } from "./status-service";
 
 const SEASON_FETCH_CONCURRENCY = 5;
 
@@ -87,12 +88,15 @@ export async function importEpisodesForShow(
     episodesLastSyncedAt: new Date().toISOString(),
   });
 
+  await recalculateAndPersistStatus(storage, media.id);
+
   return { seasonsProcessed: seasons.length, episodesAdded, episodesSkipped };
 }
 
 const ACTIVELY_WATCHING_STATUSES: ReadonlySet<MediaStatus> = new Set([
   MediaStatus.Watching,
   MediaStatus.Rewatching,
+  MediaStatus.WaitingForNewSeason,
 ]);
 
 export function needsEpisodeSync(

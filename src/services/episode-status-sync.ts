@@ -1,8 +1,14 @@
 import type { StorageService } from "./storage";
 import { Episode, EpisodeProgress } from "../models/episode";
 import { MediaVaultId } from "../types/common";
-import { recalculateAndPersistStatus } from "./status-service";
-import { addWatchSession } from "./watch-session-service";
+import {
+  getReleasedWatchableEpisodes,
+  recalculateAndPersistStatus,
+} from "./status-service";
+import {
+  completeSeriesWatch,
+  ensureSeriesWatchStarted,
+} from "./watch-session-service";
 import { touchMediaActivity } from "./activity-service";
 
 function today(): string {
@@ -38,7 +44,7 @@ export async function markEpisodeWatched(
   episode: Episode,
   watched: boolean,
   watchedDate?: string,
-  options?: { skipWatchRecord?: boolean },
+  options?: { skipWatchRecord?: boolean; silent?: boolean },
 ): Promise<EpisodeProgress> {
   const wasSeriesComplete = await isSeriesFullyWatched(
     storage,
@@ -68,15 +74,22 @@ export async function markEpisodeWatched(
 
   if (watched) {
     await touchMediaActivity(storage, episode.mediaId);
+    await ensureSeriesWatchStarted(
+      storage,
+      episode.mediaId,
+      watchedDate ?? today(),
+    );
     const isSeriesCompleteNow = await isSeriesFullyWatched(
       storage,
       episode.mediaId,
     );
     if (isSeriesCompleteNow && !wasSeriesComplete) {
-      await addWatchSession(storage, {
-        mediaId: episode.mediaId,
-        watchDate: watchedDate ?? today(),
-      });
+      await completeSeriesWatch(
+        storage,
+        episode.mediaId,
+        watchedDate ?? today(),
+        { silent: options?.silent },
+      );
     }
   } else if (wasWatched) {
     await deleteLatestEpisodeWatch(storage, episode.id);
@@ -156,12 +169,10 @@ export async function markSeasonWatched(
 
   if (watched && episodes.length > 0) {
     await touchMediaActivity(storage, mediaId);
+    await ensureSeriesWatchStarted(storage, mediaId, today());
     const isSeriesCompleteNow = await isSeriesFullyWatched(storage, mediaId);
     if (isSeriesCompleteNow && !wasSeriesComplete) {
-      await addWatchSession(storage, {
-        mediaId,
-        watchDate: today(),
-      });
+      await completeSeriesWatch(storage, mediaId, today());
     }
   }
 
@@ -218,10 +229,12 @@ export async function isSeriesFullyWatched(
     storage.episodes.findByMediaId(mediaId),
     storage.episodeProgress.findByMediaId(mediaId),
   ]);
-  if (allEpisodes.length === 0) return false;
+
+  const required = getReleasedWatchableEpisodes(allEpisodes, new Date());
+  if (required.length === 0) return false;
 
   const watchedEpisodeIds = new Set(
     progress.filter((p) => p.watched).map((p) => p.episodeId),
   );
-  return allEpisodes.every((e) => watchedEpisodeIds.has(e.id));
+  return required.every((e) => watchedEpisodeIds.has(e.id));
 }

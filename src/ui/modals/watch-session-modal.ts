@@ -2,7 +2,7 @@ import { App, Modal, Setting, Notice } from "obsidian";
 import { renderModalHeader } from "./modal-chrome";
 import type { StorageService } from "../../services/storage";
 import { WatchSession } from "../../models/review";
-import { Mood, WatchSource } from "../../types/enums";
+import { MediaType, Mood, WatchSource } from "../../types/enums";
 import { t } from "../../i18n";
 import {
   addWatchSession,
@@ -27,6 +27,9 @@ export class WatchSessionModal extends Modal {
   private mood: Mood | null;
   private context: string;
   private watchSource: WatchSource | null;
+  private supportsRange = false;
+  private completedDate = "";
+  private completed = true;
 
   constructor(
     app: App,
@@ -45,9 +48,14 @@ export class WatchSessionModal extends Modal {
     this.mood = existing?.mood ?? null;
     this.context = existing?.context ?? "";
     this.watchSource = existing?.watchSource ?? null;
+    this.completedDate = existing?.completedDate ?? "";
+    this.completed = existing ? !existing.inProgress : true;
   }
 
-  onOpen(): void {
+  async onOpen(): Promise<void> {
+    const media = await this.storage.media.findById(this.options.mediaId);
+    this.supportsRange =
+      media?.type === MediaType.TVShow || !!this.options.existingSession?.inProgress;
     const { contentEl } = this;
     contentEl.empty();
     contentEl.addClass("mediavault-watch-session-modal");
@@ -65,13 +73,48 @@ export class WatchSessionModal extends Modal {
       });
     }
 
-    new Setting(contentEl).setName(t("watchSession.watchDate")).addText((text) => {
+    new Setting(contentEl)
+      .setName(
+        this.supportsRange
+          ? t("watchSession.startDate")
+          : t("watchSession.watchDate"),
+      )
+      .addText((text) => {
       text.setValue(this.watchDate).onChange((value) => {
         this.watchDate = value;
       });
       text.inputEl.setAttribute("type", "date");
       text.inputEl.setAttribute("max", todayIsoDate());
     });
+
+    if (this.supportsRange) {
+      let endInput: HTMLInputElement | null = null;
+      new Setting(contentEl)
+        .setName(t("watchSession.completedToggle"))
+        .setDesc(t("watchSession.completedToggleDesc"))
+        .addToggle((toggle) =>
+          toggle.setValue(this.completed).onChange((value) => {
+            this.completed = value;
+            if (!value) {
+              this.completedDate = "";
+              if (endInput) endInput.value = "";
+            }
+            if (endInput) endInput.disabled = !value;
+          }),
+        );
+      new Setting(contentEl)
+        .setName(t("watchSession.endDate"))
+        .setDesc(t("watchSession.endDateDesc"))
+        .addText((text) => {
+          text.setValue(this.completedDate).onChange((value) => {
+            this.completedDate = value;
+          });
+          text.inputEl.setAttribute("type", "date");
+          text.inputEl.setAttribute("max", todayIsoDate());
+          text.inputEl.disabled = !this.completed;
+          endInput = text.inputEl;
+        });
+    }
 
     new Setting(contentEl).setName(t("watchSession.rating")).addText((text) =>
       text
@@ -162,6 +205,28 @@ export class WatchSessionModal extends Modal {
       return;
     }
 
+    let completedDate: string | null = null;
+    let inProgress = false;
+    if (this.supportsRange) {
+      inProgress = !this.completed;
+      if (this.completed) {
+        completedDate = this.completedDate || null;
+        if (!completedDate && this.options.existingSession?.inProgress) {
+          completedDate = todayIsoDate();
+        }
+      }
+      if (completedDate) {
+        if (isFutureDate(completedDate)) {
+          new Notice(t("notice.futureDateNotAllowed"));
+          return;
+        }
+        if (completedDate < this.watchDate) {
+          new Notice(t("watchSession.endBeforeStart"));
+          return;
+        }
+      }
+    }
+
     try {
       if (this.options.existingSession) {
         await updateWatchSession(
@@ -169,6 +234,7 @@ export class WatchSessionModal extends Modal {
           this.options.existingSession.id,
           {
             watchDate: this.watchDate,
+            ...(this.supportsRange ? { completedDate, inProgress } : {}),
             rating: this.rating,
             review: this.review,
             mood: this.mood,
@@ -181,6 +247,7 @@ export class WatchSessionModal extends Modal {
         await addWatchSession(this.storage, {
           mediaId: this.options.mediaId,
           watchDate: this.watchDate,
+          ...(this.supportsRange ? { completedDate, inProgress } : {}),
           rating: this.rating,
           review: this.review,
           mood: this.mood,

@@ -26,8 +26,29 @@ export function isReleased(episode: Episode, now: Date): boolean {
   return new Date(episode.airDate).getTime() <= now.getTime();
 }
 
+const episodeOrderKey = (e: Pick<Episode, "seasonNumber" | "episodeNumber">) =>
+  e.seasonNumber * 100000 + e.episodeNumber;
+
+export function getReleasedWatchableEpisodes(
+  episodes: Episode[],
+  now: Date,
+): Episode[] {
+  const regular = episodes.filter((e) => e.seasonNumber > 0);
+  let lastAiredKey = -1;
+  for (const e of regular) {
+    if (isReleased(e, now)) {
+      lastAiredKey = Math.max(lastAiredKey, episodeOrderKey(e));
+    }
+  }
+  return regular.filter(
+    (e) =>
+      isReleased(e, now) || (!e.airDate && episodeOrderKey(e) < lastAiredKey),
+  );
+}
+
 export function calculateMediaStatus(
-  media: Pick<MediaItem, "type" | "status" | "tvStatus">,
+  media: Pick<MediaItem, "type" | "status" | "tvStatus"> &
+    Partial<Pick<MediaItem, "episodesLastSyncedAt">>,
   ctx: StatusCalculationContext,
   now: Date = new Date(),
 ): MediaStatus {
@@ -40,37 +61,33 @@ export function calculateMediaStatus(
     return MediaStatus.PlanToWatch;
   }
 
-  const releasedEpisodes = ctx.episodes.filter((e) => isReleased(e, now));
-  const progressByEpisodeId = new Map(
-    ctx.episodeProgress.map((p) => [p.episodeId, p]),
+  const watchedEpisodeIds = new Set(
+    ctx.episodeProgress.filter((p) => p.watched).map((p) => p.episodeId),
   );
-  const watchedReleasedCount = releasedEpisodes.filter(
-    (e) => progressByEpisodeId.get(e.id)?.watched,
+  const releasedEpisodes = getReleasedWatchableEpisodes(ctx.episodes, now);
+  const watchedReleasedCount = releasedEpisodes.filter((e) =>
+    watchedEpisodeIds.has(e.id),
   ).length;
+  const anyWatched = ctx.episodes.some(
+    (e) => e.seasonNumber > 0 && watchedEpisodeIds.has(e.id),
+  );
 
   if (watchedReleasedCount === 0) {
-    return MediaStatus.PlanToWatch;
+    return anyWatched ? MediaStatus.Watching : MediaStatus.PlanToWatch;
   }
 
-  const allReleasedWatched = watchedReleasedCount >= releasedEpisodes.length;
-
-  if (!allReleasedWatched) {
+  if (watchedReleasedCount < releasedEpisodes.length) {
     return MediaStatus.Watching;
   }
 
-  if (media.tvStatus && ENDED_TV_STATUSES.has(media.tvStatus)) {
-    return MediaStatus.Completed;
-  }
-  if (!media.tvStatus) {
-    return MediaStatus.Completed;
+  if (!media.episodesLastSyncedAt) {
+    return MediaStatus.Watching;
   }
 
-  const hasScheduledFutureEpisode = ctx.episodes.some(
-    (e) => e.airDate !== null && new Date(e.airDate).getTime() > now.getTime(),
-  );
-  return hasScheduledFutureEpisode
-    ? MediaStatus.UpToDate
-    : MediaStatus.WaitingForNewSeason;
+  if (!media.tvStatus || ENDED_TV_STATUSES.has(media.tvStatus)) {
+    return MediaStatus.Completed;
+  }
+  return MediaStatus.WaitingForNewSeason;
 }
 
 export async function recalculateAndPersistStatus(

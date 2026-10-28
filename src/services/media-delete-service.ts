@@ -5,6 +5,7 @@ import { MediaItem } from "../models/media";
 import { MediaType } from "../types/enums";
 import { MediaVaultId } from "../types/common";
 import { removeLocalImageIfAny } from "./local-image-service";
+import { recordMediaDeletion } from "./sync-tombstones";
 
 export interface MediaDeletionSummary {
   mediaTitle: string;
@@ -43,6 +44,7 @@ export async function deleteMedia(
   const listsAffected =
     await storage.customLists.removeMediaEverywhere(mediaId);
   const noteDeleted = await deleteMediaNote(app, media);
+  await recordMediaDeletion(app, storage, media);
   if (media.type === MediaType.Movie) {
     await storage.movieProgress.deleteByMediaId(mediaId);
   }

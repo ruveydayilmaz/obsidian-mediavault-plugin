@@ -680,6 +680,7 @@ export class MediaDetailModal extends Modal {
           const file = this.app.vault.getAbstractFileByPath(path);
           if (file instanceof TFile) {
             await this.app.workspace.getLeaf(false).openFile(file);
+            this.close();
           }
           this.onChanged?.();
         }),
@@ -690,9 +691,10 @@ export class MediaDetailModal extends Modal {
         .setTitle(t("comfort.profileTitle"))
         .setIcon("heart")
         .onClick(() => {
-          new ComfortProfileModal(this.app, this.storage, this.media, () =>
-            this.onChanged?.(),
-          ).open();
+          new ComfortProfileModal(this.app, this.storage, this.media, () => {
+            void this.syncNoteAfterComfortChange();
+            this.onChanged?.();
+          }).open();
         }),
     );
 
@@ -960,8 +962,16 @@ export class MediaDetailModal extends Modal {
     });
     entryHeader.createSpan({
       cls: "mediavault-timeline-date",
-      text: session.watchDate,
+      text: session.completedDate
+        ? `${session.watchDate} → ${session.completedDate}`
+        : session.watchDate,
     });
+    if (session.inProgress) {
+      entryHeader.createSpan({
+        cls: "mediavault-timeline-in-progress",
+        text: t("detail.inProgress"),
+      });
+    }
     if (session.rating !== null) {
       entryHeader.createSpan({
         cls: "mediavault-timeline-rating",
@@ -2581,7 +2591,7 @@ export class MediaDetailModal extends Modal {
         attr: { "aria-label": label, title: label },
       });
 
-      const iconEl = btn.createDiv({ cls: "clickable-icon mediavault-emotion-btn-icon" });
+      const iconEl = btn.createDiv({ cls: "mediavault-emotion-btn-icon" });
       setIcon(iconEl, emotion.icon);
       btn.createDiv({ cls: "mediavault-emotion-btn-label", text: label });
 
@@ -2711,11 +2721,25 @@ export class MediaDetailModal extends Modal {
     }
   }
 
+  private async syncNoteAfterComfortChange(): Promise<void> {
+    try {
+      await this.storage.flushTouches();
+      const latest = await this.storage.media.findById(this.media.id);
+      if (!latest || !latest.notePath) return;
+      await generateMediaNote(this.app, this.storage, latest);
+    } catch (err) {
+      console.warn("MediaVault: note update after comfort change failed", err);
+    }
+  }
+
+  onClosedHook?: () => void;
+
   onClose(): void {
     this.castLoadMoreObserver?.disconnect();
     this.castLoadMoreObserver = null;
     this.plugin?.unregisterLocaleAwareModal(this);
     this.contentEl.empty();
+    this.onClosedHook?.();
   }
 
   rerenderForLocaleChange(): void {

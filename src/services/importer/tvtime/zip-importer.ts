@@ -123,6 +123,61 @@ const GDPR_RELATIONAL_FILES = new Set([
   "lists-prod-lists.csv",
 ]);
 
+const MAX_ZIP_ENTRY_BYTES = 128 * 1024 * 1024;
+const MAX_ZIP_TOTAL_BYTES = 512 * 1024 * 1024;
+const MAX_ZIP_ENTRIES = 5000;
+
+interface BoundedStream {
+  on(event: "data", cb: (chunk: Uint8Array) => void): BoundedStream;
+  on(event: "end", cb: () => void): BoundedStream;
+  on(event: "error", cb: (err: Error) => void): BoundedStream;
+  pause(): BoundedStream;
+  resume(): BoundedStream;
+}
+
+function readEntryText(
+  entry: JSZip.JSZipObject,
+  maxBytes: number,
+): Promise<{ text: string; bytes: number }> {
+  return new Promise((resolve, reject) => {
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    let failed = false;
+    const stream = (
+      entry as unknown as { internalStream(type: "uint8array"): BoundedStream }
+    ).internalStream("uint8array");
+    stream.on("data", (chunk) => {
+      if (failed) return;
+      total += chunk.length;
+      if (total > maxBytes) {
+        failed = true;
+        stream.pause();
+        reject(new Error("ZIP entry is too large to import safely."));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    stream.on("error", (err) => {
+      failed = true;
+      reject(err);
+    });
+    stream.on("end", () => {
+      if (failed) return;
+      const merged = new Uint8Array(total);
+      let offset = 0;
+      for (const chunk of chunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+      resolve({
+        text: new TextDecoder("utf-8", { ignoreBOM: true }).decode(merged),
+        bytes: total,
+      });
+    });
+    stream.resume();
+  });
+}
+
 function basename(path: string): string {
   const parts = path.split("/");
   return parts[parts.length - 1];
@@ -149,7 +204,12 @@ export async function runZipImport(
     (entry) => !entry.dir && /\.(csv|json)$/i.test(entry.name),
   );
 
+  if (entries.length > MAX_ZIP_ENTRIES) {
+    throw new Error("This ZIP contains too many files to import safely.");
+  }
+
   onProgress?.(0, Math.max(entries.length, 1), "Extracting files");
+  let totalBytes = 0;
 
   const bundles: NormalizedImportBundle[] = [];
   const files: ZipFileResult[] = [];
@@ -179,9 +239,14 @@ export async function runZipImport(
     }
 
     try {
-      let content = await timer.time("ZIP extraction", () =>
-        entry.async("text"),
+      const extracted = await timer.time("ZIP extraction", () =>
+        readEntryText(entry, MAX_ZIP_ENTRY_BYTES),
       );
+      totalBytes += extracted.bytes;
+      if (totalBytes > MAX_ZIP_TOTAL_BYTES) {
+        throw new Error("This ZIP expands to too much data to import safely.");
+      }
+      let content = extracted.text;
       contents.set(name.toLowerCase(), content);
 
       if (GDPR_RELATIONAL_FILES.has(name.toLowerCase())) {

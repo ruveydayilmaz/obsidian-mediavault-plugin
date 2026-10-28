@@ -28,6 +28,7 @@ interface RequestOptions {
 
 const DEFAULT_MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 500;
+const MAX_RETRY_AFTER_MS = 30_000;
 
 export class TMDBHttpClient {
   constructor(private getApiKey: () => string) {}
@@ -57,9 +58,13 @@ export class TMDBHttpClient {
 
         if (response.status === 429) {
           const retryAfterHeader = response.headers?.["retry-after"];
-          const retryAfterMs = retryAfterHeader
-            ? parseInt(retryAfterHeader, 10) * 1000
-            : BASE_BACKOFF_MS * Math.pow(2, attempt);
+          const retryAfterSeconds = retryAfterHeader
+            ? parseInt(retryAfterHeader, 10)
+            : NaN;
+          const retryAfterMs =
+            Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
+              ? Math.min(retryAfterSeconds * 1000, MAX_RETRY_AFTER_MS)
+              : BASE_BACKOFF_MS * Math.pow(2, attempt);
           await sleep(retryAfterMs);
           continue;
         }
@@ -99,9 +104,13 @@ export class TMDBHttpClient {
       }
     }
 
-    throw lastError instanceof Error
-      ? lastError
-      : new TMDBApiError("TMDB request failed after retries.", null);
+    if (lastError instanceof Error) {
+      if (apiKey && lastError.message.includes(apiKey)) {
+        lastError.message = lastError.message.split(apiKey).join("[redacted]");
+      }
+      throw lastError;
+    }
+    throw new TMDBApiError("TMDB request failed after retries.", null);
   }
 
   private buildUrl(

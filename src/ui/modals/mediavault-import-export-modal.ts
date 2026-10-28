@@ -10,6 +10,7 @@ import {
   DEFAULT_IMPORT_CATEGORIES,
 } from "../../services/mediavault-export";
 import { t } from "../../i18n";
+import { MAX_IMPORT_FILE_BYTES } from "../../services/importer/limits";
 
 export class MediaVaultImportExportModal extends Modal {
   private busy = false;
@@ -53,6 +54,11 @@ export class MediaVaultImportExportModal extends Modal {
     if (!file || this.busy) return;
     input.disabled = true;
 
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      new Notice(t("import.fileTooLarge"));
+      input.disabled = false;
+      return;
+    }
     try {
       const raw = await file.text();
       let parsed: unknown;

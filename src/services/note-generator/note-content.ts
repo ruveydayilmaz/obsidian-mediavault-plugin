@@ -27,6 +27,7 @@ export function buildManagedBody(
   media: MediaItem,
   sessions: WatchSession[],
   sections: NoteTemplateSettings["sections"],
+  dataBlock?: string,
 ): string {
   const lines: string[] = [MANAGED_START];
 
@@ -94,6 +95,8 @@ export function buildManagedBody(
     }
   }
 
+  if (dataBlock) lines.push("", dataBlock);
+
   lines.push("", MANAGED_END);
   return lines.join("\n");
 }
@@ -115,4 +118,42 @@ export function mergeManagedBody(
   const before = existingContent.slice(0, startIdx);
   const after = existingContent.slice(endIdx + MANAGED_END.length);
   return `${before}${newManagedBody}${after}`;
+}
+
+export const CUSTOM_START = "<!-- mediavault:custom:start -->";
+export const CUSTOM_END = "<!-- mediavault:custom:end -->";
+
+function normalizeCustom(custom: string): string {
+  return custom
+    .replace(/\r\n/g, "\n")
+    .replace(/^\n+|\s+$/g, "")
+    .split("<!-- mediavault:custom")
+    .join("<!-- mediavault-custom");
+}
+
+export function stripCustomBlock(content: string): string {
+  const si = content.indexOf(CUSTOM_START);
+  const ei = content.indexOf(CUSTOM_END);
+  if (si === -1 || ei < si) return content;
+  return content.slice(0, si) + content.slice(ei + CUSTOM_END.length);
+}
+
+export function applyCustomMarkdown(body: string, custom: string): string {
+  const text = normalizeCustom(custom);
+  const si = body.indexOf(CUSTOM_START);
+  const ei = body.indexOf(CUSTOM_END);
+  const hasBlock = si !== -1 && ei > si;
+
+  if (!text) {
+    if (!hasBlock) return body;
+    const before = body.slice(0, si).trimEnd();
+    const after = body.slice(ei + CUSTOM_END.length).trim();
+    return after ? `${before}\n\n${after}\n` : `${before}\n`;
+  }
+
+  const block = `${CUSTOM_START}\n${text}\n${CUSTOM_END}`;
+  if (hasBlock) {
+    return `${body.slice(0, si)}${block}${body.slice(ei + CUSTOM_END.length)}`;
+  }
+  return `${body.trimEnd()}\n\n${block}\n`;
 }
