@@ -4935,8 +4935,9 @@ body:not(.is-mobile) .mediavault-lists-track .mediavault-list-tile-banner {
 }
 
 body.mediavault-web .mediavault-comfort-flags {
+  display: flex;
   align-items: stretch;
-  column-gap: 16px;
+  gap: 16px;
 }
 
 body.mediavault-web .mediavault-comfort-flags > .setting-item {
