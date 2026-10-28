@@ -208,7 +208,7 @@ export class ActorDetailsModal extends Modal {
       const imdbLink = info.createEl("a", {
         cls: "mediavault-actor-imdb-link",
         text: t("detail.viewOnImdb"),
-        href: `https://www.imdb.com/name/${this.person.imdbId}/`,
+        href: `https://www.imdb.com/name/${encodeURIComponent(this.person.imdbId)}/`,
       });
       imdbLink.setAttr("target", "_blank");
       imdbLink.setAttr("rel", "noopener");

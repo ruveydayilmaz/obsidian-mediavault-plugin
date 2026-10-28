@@ -7,6 +7,7 @@ export interface WatchSession {
 
   watchDate: ISODateString;
   completedDate: ISODateString | null;
+  inProgress?: boolean;
 
   rating: number | null;
 

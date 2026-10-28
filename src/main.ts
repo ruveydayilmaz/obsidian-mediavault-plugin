@@ -1,4 +1,7 @@
-import { Notice, Plugin, WorkspaceLeaf } from "obsidian";
+import { onSeriesWatchCompleted } from "./services/watch-session-service";
+import { MediaStatus, MediaType } from "./types/enums";
+import { importEpisodesForShow } from "./services/episode-import";
+import { Notice, Plugin, TFile, WorkspaceLeaf, setIcon } from "obsidian";
 import { MediaVaultSettings } from "./settings/settings";
 import { MediaVaultSettingTab } from "./settings/settings-tab";
 
@@ -47,6 +50,7 @@ import { WatchSessionModal } from "./ui/modals/watch-session-modal";
 import { MediaDetailModal } from "./ui/modals/media-detail-modal";
 import { ImportModal } from "./ui/modals/import-modal";
 import { TraktService } from "./api/trakt";
+import { setupMobileKeyboardSupport } from "./utils/mobile-keyboard";
 import { ensureValidTraktToken } from "./services/trakt-token";
 import { pullFromTrakt, pushToTrakt } from "./services/trakt-sync";
 import { generateTraktHistoryNote } from "./services/trakt-note-generator";
@@ -55,10 +59,17 @@ import {
   generateNotesInBatches,
 } from "./services/note-generator/media-note-generator";
 import { NoteSyncService } from "./services/note-sync-service";
+import { BackupService } from "./services/backup-service";
+import {
+  FolderSyncService,
+  type SyncResult,
+} from "./services/folder-sync-service";
 import {
   generateAllListNotes,
-  reconstructListsFromNotes,
+  generateListNote,
+  resolveListNotePath,
 } from "./services/list-note-generator";
+import { mapWithConcurrency } from "./services/importer/concurrency";
 import { exportMediaToVault } from "./services/mediavault-export";
 import type { ExportCategoryOptions } from "./services/mediavault-export";
 import { MediaVaultImportExportModal } from "./ui/modals/mediavault-import-export-modal";
@@ -76,10 +87,19 @@ import type { MediaItem } from "./models/media";
 import type { Episode } from "./models/episode";
 import {
   applyAndroidBodyClass,
+  applyWebBodyClass,
+  removeWebBodyClass,
+  applyAndroidMenuOffset,
   setupAndroidSafeArea,
   teardownAndroidSafeArea,
 } from "./utils/platform";
 import { i18n, t, Locale } from "./i18n";
+import { trackOperation, setJournal, journalEvent } from "./services/operation-log";
+import { Diagnostics } from "./services/diagnostics";
+import { syncStatus, SyncStatusState } from "./services/sync-status";
+import { SyncProgressModal } from "./ui/modals/sync-progress-modal";
+
+const STARTUP_DELAY_MS = 1500;
 
 export default class MediaVaultPlugin extends Plugin {
   storage!: StorageService;
@@ -90,33 +110,98 @@ export default class MediaVaultPlugin extends Plugin {
   private notificationCheckIntervalHandle: number | null = null;
   private noteSyncIntervalHandle: number | null = null;
   noteSync!: NoteSyncService;
+  backup!: BackupService;
+  folderSync!: FolderSyncService;
   private mediaChangeDebounceHandle: number | null = null;
+  private unloaded = false;
+  private manualSyncInFlight = false;
+  private syncProgressModal: SyncProgressModal | null = null;
+  private syncStatusBarEl: HTMLElement | null = null;
+  diagnostics: Diagnostics | null = null;
+  private startupSettled = false;
+  private scheduledTimers = new Set<number>();
   private unsubscribeLocaleChange: (() => void) | null = null;
   private localeAwareModals: Set<{ rerenderForLocaleChange: () => void }> =
     new Set();
 
+  private scheduleTask(delayMs: number, fn: () => void): void {
+    const handle = window.setTimeout(() => {
+      this.scheduledTimers.delete(handle);
+      if (this.unloaded) return;
+      fn();
+    }, delayMs);
+    this.scheduledTimers.add(handle);
+  }
+
   async onload() {
     applyAndroidBodyClass();
+    applyWebBodyClass();
+    this.register(() => removeWebBodyClass());
     setupAndroidSafeArea(this.app);
 
     this.storage = new StorageService(this);
     await this.storage.initialize();
+    try {
+      const pluginDir =
+        this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+      this.diagnostics = new Diagnostics(
+        this.app.vault.adapter,
+        `${pluginDir}/diagnostics.json`,
+      );
+      await this.diagnostics.init();
+      setJournal(this.diagnostics);
+    } catch {
+      this.diagnostics = null;
+    }
+    const setAside = this.storage.adapter.loadWarnings;
+    if (setAside.length > 0) {
+      new Notice(t("backup.dataFileSetAside", { files: setAside.join(", ") }), 15000);
+    }
     initLocalImageService(this.app);
     i18n.setLocale(this.storage.settings.get().language);
+    applyAndroidMenuOffset(this.storage.settings.get().androidMenuOffsetPx);
+    this.register(() =>
+      document.body.style.removeProperty("--mediavault-android-menu-offset"),
+    );
     this.unsubscribeLocaleChange = i18n.onChange(() => this.onLocaleChanged());
     this.statistics = new StatisticsService(this.storage);
     await seedBuiltInPresets(this.storage);
     await this.ensureNotificationActivationDate();
 
-    this.noteSync = new NoteSyncService(this.app, this.storage);
+    this.backup = new BackupService(
+      this.app,
+      this.storage,
+      this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`,
+      this.manifest.version,
+    );
+    this.noteSync = new NoteSyncService(this.app, this.storage, this.backup);
+    this.register(
+      onSeriesWatchCompleted((session) => {
+        void this.showSeriesCompletedNotice(session.id, session.mediaId);
+      }),
+    );
+    this.folderSync = new FolderSyncService(
+      this.app,
+      this.storage,
+      () => this.tmdb ?? null,
+      () => {
+      this.refreshLibraryViews();
+      this.refreshListViews();
+        this.refreshExploreViews();
+      },
+      this.backup,
+    );
+    this.register(() => this.folderSync.dispose());
 
     this.storage.media.onUpdated = () => {
+      if (this.unloaded) return;
+      this.mediaUpdateEvents++;
       if (this.mediaChangeDebounceHandle !== null) {
         window.clearTimeout(this.mediaChangeDebounceHandle);
       }
       this.mediaChangeDebounceHandle = window.setTimeout(() => {
         this.mediaChangeDebounceHandle = null;
-        void this.noteSync.checkAndSyncIfNeeded();
+        this.requestEditSync();
       }, 4000);
     };
 
@@ -141,7 +226,10 @@ export default class MediaVaultPlugin extends Plugin {
     this.setupTraktAutoSync();
     this.setupNotificationSchedule();
     this.setupNoteSyncSchedule();
+    this.setupSyncStatusBar();
+    this.scheduleStartupSequence();
     this.setupInputKeyboardUX();
+    setupMobileKeyboardSupport(this);
 
     this.registerView(VIEW_TYPE_LIBRARY, (leaf) => new LibraryView(leaf, this));
     this.registerView(
@@ -276,6 +364,14 @@ export default class MediaVaultPlugin extends Plugin {
       name: t("command.syncNotes"),
       callback: () => {
         void this.runManualNoteSync();
+      },
+    });
+
+    this.addCommand({
+      id: "show-sync-progress",
+      name: t("syncProgress.command"),
+      callback: () => {
+        this.openSyncProgress();
       },
     });
 
@@ -423,19 +519,258 @@ export default class MediaVaultPlugin extends Plugin {
     );
   }
 
-  async runManualNoteSync(): Promise<void> {
-    if (this.noteSync.isRunning()) {
-      new Notice(t("noteSync.alreadyRunning"));
+  private async showSeriesCompletedNotice(
+    sessionId: string,
+    mediaId: string,
+  ): Promise<void> {
+    const media = await this.storage.media.findById(mediaId);
+    if (!media) return;
+    const notice = new Notice("", 8000);
+    const el = notice.messageEl;
+    el.empty();
+    el.addClass("mediavault-series-completed-notice");
+    setIcon(el.createSpan(), "pencil");
+    el.createSpan({
+      text: t("notice.seriesCompleted", { title: media.title }),
+    });
+    el.setAttr("role", "button");
+    el.setAttr("tabindex", "0");
+    const open = () => {
+      notice.hide();
+      void (async () => {
+        const session = await this.storage.watchSessions.findById(sessionId);
+        if (!session) return;
+        new WatchSessionModal(this.app, this.storage, {
+          mediaId,
+          mediaTitle: media.title,
+          existingSession: session,
+          onSaved: () => {
+            this.refreshLibraryViews();
+            this.refreshListViews();
+          },
+        }).open();
+      })();
+    };
+    el.addEventListener("click", open);
+    el.addEventListener("keydown", (evt) => {
+      if (evt.key === "Enter" || evt.key === " ") open();
+    });
+  }
+
+  async refreshGeneratedNotes(): Promise<void> {
+    if (this.storage.pipelineBusy) {
+      this.scheduleTask(3000, () => void this.refreshGeneratedNotes());
       return;
     }
-    const notice = new Notice(t("noteSync.syncing"), 0);
-    await this.noteSync.runManualSync((done, total) => {
-      notice.setMessage(t("noteSync.syncingProgress", { done, total }));
+    const media = (await this.storage.media.getAll()).filter(
+      (m) => !!m.notePath && this.app.vault.getAbstractFileByPath(m.notePath) instanceof TFile,
+    );
+    await mapWithConcurrency(media, 4, async (m) => {
+      try {
+        await generateMediaNote(this.app, this.storage, m, {
+          respectNewerNote: true,
+        });
+      } catch (err) {
+        console.warn(`MediaVault: could not refresh note for "${m.title}"`, err);
+      }
     });
-    notice.hide();
-    new Notice(t("noteSync.syncComplete"));
-    this.refreshLibraryViews();
-    this.refreshListViews();
+    const base = this.storage.settings.get().mediaFolderPath || "MediaVault";
+    for (const list of await this.storage.customLists.getAll()) {
+      const path = resolveListNotePath(base.replace(/\/+$/, ""), list);
+      if (this.app.vault.getAbstractFileByPath(path) instanceof TFile) {
+        try {
+          await generateListNote(this.app, this.storage, list, path);
+        } catch (err) {
+          console.warn(`MediaVault: could not refresh list note "${list.title}"`, err);
+        }
+      }
+    }
+  }
+
+  private async repairEpisodeLists(): Promise<void> {
+    if (!this.storage.settings.get().tmdbApiKey) return;
+    const release = await this.storage.acquirePipelineWhenFree();
+    try {
+      await this.repairEpisodeListsLocked();
+    } finally {
+      release();
+    }
+  }
+
+  private async repairEpisodeListsLocked(): Promise<void> {
+    if (this.unloaded) return;
+    const shows = (await this.storage.media.getAll())
+      .filter(
+        (m) =>
+          m.type === MediaType.TVShow &&
+          !m.episodesLastSyncedAt &&
+          m.status === MediaStatus.Watching,
+      )
+      .slice(0, 40);
+    if (shows.length === 0) return;
+    {
+      const outcome = await trackOperation(
+        "episode-repair",
+        async () => {
+          for (const show of shows) {
+            if (this.unloaded) return;
+            try {
+              await importEpisodesForShow(this.storage, this.tmdb, show);
+            } catch {
+              continue;
+            }
+          }
+        },
+        { exclusive: true },
+      );
+      if (outcome.ran && !this.unloaded) {
+        this.refreshLibraryViews();
+        this.refreshListViews();
+      }
+    }
+  }
+
+  openSyncProgress(): void {
+    if (this.syncProgressModal) return;
+    if (syncStatus.state.stage === "idle") {
+      new Notice(t("syncProgress.notRun"));
+      return;
+    }
+    const modal = new SyncProgressModal(this.app, () => {
+      void this.runManualNoteSync();
+    });
+    const originalOnClose = modal.onClose.bind(modal);
+    modal.onClose = (): void => {
+      originalOnClose();
+      this.syncProgressModal = null;
+    };
+    this.syncProgressModal = modal;
+    modal.open();
+  }
+
+  private setupSyncStatusBar(): void {
+    const el = this.addStatusBarItem();
+    el.addClass("mediavault-sync-status-item");
+    el.setAttribute("aria-label", t("syncProgress.openProgress"));
+    el.addClass("is-hidden");
+    el.addEventListener("click", () => this.openSyncProgress());
+    this.syncStatusBarEl = el;
+    let hideHandle: number | null = null;
+    const render = (state: SyncStatusState): void => {
+      if (hideHandle !== null) {
+        window.clearTimeout(hideHandle);
+        hideHandle = null;
+      }
+      if (state.stage === "idle") {
+        el.addClass("is-hidden");
+        return;
+      }
+      el.removeClass("is-hidden");
+      if (state.stage === "queued") {
+        el.setText(t("syncProgress.statusQueued"));
+      } else if (state.stage === "completed") {
+        el.setText(t("syncProgress.statusDone"));
+        hideHandle = window.setTimeout(() => {
+          el.addClass("is-hidden");
+        }, 6000);
+      } else if (state.stage === "failed" || state.stage === "skipped") {
+        el.setText(t("syncProgress.statusFailed"));
+      } else {
+        const percent =
+          state.total && state.total > 0
+            ? `${Math.min(99, Math.floor((state.done / state.total) * 100))}%`
+            : "…";
+        el.setText(t("syncProgress.statusRunning", { percent }));
+      }
+    };
+    const unsubscribe = syncStatus.subscribe(render);
+    this.register(() => {
+      unsubscribe();
+      if (hideHandle !== null) window.clearTimeout(hideHandle);
+      el.remove();
+      this.syncStatusBarEl = null;
+    });
+  }
+
+  async runManualNoteSync(): Promise<void> {
+    journalEvent("manual-sync-requested", {
+      lockHeld: this.storage.pipelineBusy,
+      startupSettled: this.startupSettled,
+    });
+    if (this.manualSyncInFlight) {
+      this.openSyncProgress();
+      return;
+    }
+    this.manualSyncInFlight = true;
+    const backgroundActive = syncStatus.running;
+    const queued = this.storage.pipelineBusy || this.folderSync.isRunning();
+    if (!backgroundActive) syncStatus.begin(true, queued);
+    this.openSyncProgress();
+    let release: (() => void) | null = null;
+    try {
+      release = await this.storage.acquirePipelineWhenFree();
+      if (this.unloaded) {
+        syncStatus.skip("syncProgress.notRun");
+        return;
+      }
+      if (backgroundActive) syncStatus.begin(true, false);
+      const result = await this.folderSync.sync({
+        reason: "manual",
+        createMissingNotes: true,
+        pipelineHeld: true,
+      });
+      if (result.status === "ok") this.diagnostics?.markSyncHealthy();
+      this.reportSync(result, true);
+    } catch (err) {
+      console.error("MediaVault: sync failed", err);
+      syncStatus.fail(
+        "folderSync.syncFailed",
+        err instanceof Error ? err.message.slice(0, 160) : null,
+      );
+      new Notice(t("folderSync.syncFailed"));
+    } finally {
+      release?.();
+      this.manualSyncInFlight = false;
+    }
+  }
+
+  private reportSync(result: SyncResult, verbose: boolean): void {
+    if (result.status === "folderNotFound") {
+      if (verbose) new Notice(t("folderSync.folderNotFound"));
+      return;
+    }
+    if (result.status === "noFiles") {
+      if (verbose) new Notice(t("folderSync.noFiles"));
+      return;
+    }
+    if (result.status === "backupFailed") {
+      new Notice(t("backup.failedAbort"));
+      return;
+    }
+    if (result.status === "busy") {
+      if (verbose) new Notice(t("folderSync.alreadyRunning"));
+      return;
+    }
+    const changed =
+      result.cacheUpdates > 0 ||
+      result.folderUpdates > 0 ||
+      result.artworkUpdates > 0;
+    if (changed) {
+      this.refreshLibraryViews();
+      this.refreshListViews();
+      this.refreshExploreViews();
+    }
+    if (verbose || changed || result.conflicts > 0) {
+      new Notice(
+        `${t("folderSync.syncComplete")}\n${t("folderSync.summary", {
+          checked: result.itemsChecked,
+          cache: result.cacheUpdates,
+          folder: result.folderUpdates,
+          artwork: result.artworkUpdates,
+          conflicts: result.conflicts,
+        })}`,
+      );
+    }
   }
 
   async runExportLibrary(): Promise<void> {
@@ -510,8 +845,9 @@ export default class MediaVaultPlugin extends Plugin {
     media: MediaItem,
     episode?: Episode,
     listContext?: { listId: string; listTitle: string; onRemoved?: () => void },
+    onClosed?: () => void,
   ): void {
-    new MediaDetailModal(
+    const modal = new MediaDetailModal(
       this.app,
       this.storage,
       this.tmdb,
@@ -527,7 +863,9 @@ export default class MediaVaultPlugin extends Plugin {
       false,
       null,
       listContext,
-    ).open();
+    );
+    modal.onClosedHook = onClosed;
+    modal.open();
   }
 
   openEpisodeTracker(media: MediaItem): void {
@@ -609,7 +947,18 @@ export default class MediaVaultPlugin extends Plugin {
     }
   }
 
+  private listDetailModals = new Set<{ refreshInPlace: () => void }>();
+
+  registerListDetailModal(modal: { refreshInPlace: () => void }): void {
+    this.listDetailModals.add(modal);
+  }
+
+  unregisterListDetailModal(modal: { refreshInPlace: () => void }): void {
+    this.listDetailModals.delete(modal);
+  }
+
   refreshListViews(): void {
+    this.listDetailModals.forEach((modal) => modal.refreshInPlace());
     this.app.workspace.getLeavesOfType(VIEW_TYPE_LISTS).forEach((leaf) => {
       const view = leaf.view;
       if (view instanceof ListsView) {
@@ -716,13 +1065,33 @@ export default class MediaVaultPlugin extends Plugin {
     await workspace.revealLeaf(leaf);
   }
 
-  async runTraktSync(): Promise<void> {
+  async runTraktSync(opts: { auto?: boolean } = {}): Promise<void> {
     const settings = this.storage.settings.get();
     if (!settings.traktClientId || !settings.traktAccessToken) {
-      new Notice(t("notice.connectTraktFirst"));
+      if (!opts.auto) new Notice(t("notice.connectTraktFirst"));
+      return;
+    }
+    if (this.unloaded) return;
+    if (this.storage.pipelineBusy && !opts.auto) {
+      new Notice(t("backup.syncBusy"));
       return;
     }
 
+    const release = await this.storage.acquirePipelineWhenFree();
+    try {
+      if (this.unloaded) return;
+      const outcome = await trackOperation(
+        "trakt-sync",
+        () => this.runTraktSyncBody(),
+        { exclusive: true },
+      );
+      if (!outcome.ran && !opts.auto) new Notice(t("backup.syncBusy"));
+    } finally {
+      release();
+    }
+  }
+
+  private async runTraktSyncBody(): Promise<void> {
     new Notice(t("notice.syncingWithTrakt"));
     try {
       const token = await ensureValidTraktToken(this.storage);
@@ -801,14 +1170,12 @@ export default class MediaVaultPlugin extends Plugin {
     const settings = this.storage.settings.get();
     if (!settings.traktAccessToken) return;
 
-    if (settings.traktAutoSync === "on_startup") {
-      window.setTimeout(() => void this.runTraktSync(), 3000);
-    } else if (settings.traktAutoSync === "interval") {
+    if (settings.traktAutoSync === "interval") {
       const ms = Math.max(5, settings.traktSyncIntervalMinutes) * 60 * 1000;
-      this.syncIntervalHandle = window.setInterval(
-        () => void this.runTraktSync(),
-        ms,
-      );
+      this.syncIntervalHandle = window.setInterval(() => {
+        if (this.unloaded || !this.startupSettled) return;
+        void this.runTraktSync({ auto: true });
+      }, ms);
       this.registerInterval(this.syncIntervalHandle);
     }
   }
@@ -824,60 +1191,218 @@ export default class MediaVaultPlugin extends Plugin {
   }
 
   private setupNoteSyncSchedule(): void {
-    window.setTimeout(() => void this.noteSync.checkOnStartup(), 3000);
-
-    window.setTimeout(() => {
-      void reconstructListsFromNotes(this.app, this.storage).then((count) => {
-        if (count > 0) {
-          this.refreshListViews();
-          new Notice(t("notice.listsReconstructed", { count }));
-        }
-      });
-    }, 3500);
-
     this.noteSyncIntervalHandle = window.setInterval(
-      () => void this.noteSync.checkAndSyncIfNeeded(),
+      () => {
+        if (this.unloaded || !this.startupSettled) return;
+        if (!this.isAutoNoteSyncEnabled()) return;
+        void this.noteSync.checkAndSyncIfNeeded();
+      },
       60 * 60 * 1000,
     );
     this.registerInterval(this.noteSyncIntervalHandle);
+
+    this.setupNoteReconcileWatcher();
+  }
+
+  private mediaUpdateEvents = 0;
+  private editSyncSeq = 0;
+  private editSyncPending = false;
+  private editSyncWaiting = false;
+
+  private requestEditSync(): void {
+    if (this.unloaded) return;
+    if (!this.isAutoNoteSyncEnabled()) return;
+    journalEvent("edit-sync-requested", {
+      seq: ++this.editSyncSeq,
+      updateEvents: this.mediaUpdateEvents,
+      startupSettled: this.startupSettled,
+      pipelineBusy: this.storage.pipelineBusy,
+    });
+    this.mediaUpdateEvents = 0;
+    if (!this.startupSettled) {
+      this.editSyncPending = true;
+      return;
+    }
+    if (this.storage.pipelineBusy || this.noteSync.isRunning()) {
+      if (this.editSyncWaiting) return;
+      this.editSyncWaiting = true;
+      void this.storage
+        .acquirePipelineWhenFree()
+        .then((release) => {
+          release();
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          this.editSyncWaiting = false;
+          if (!this.unloaded) this.requestEditSync();
+        });
+      return;
+    }
+    void this.noteSync.checkAndSyncIfNeeded().catch((err) => {
+      console.warn(
+        "MediaVault: edit-triggered sync failed",
+        err instanceof Error ? err.message : "unknown error",
+      );
+    });
+  }
+
+  private scheduleStartupSequence(): void {
+    this.app.workspace.onLayoutReady(() => {
+      this.scheduleTask(STARTUP_DELAY_MS, () => {
+        void this.runStartupSequence();
+      });
+    });
+  }
+
+  private async runStartupSequence(): Promise<void> {
+    const steps: [string, () => Promise<void>][] = [
+      [
+        "folder-sync",
+        async () => {
+          if (!this.isAutoNoteSyncEnabled()) return;
+          if (this.diagnostics?.startupSyncSuppressed) {
+            journalEvent("startup-sync-deferred");
+            new Notice(t("backup.startupSyncDeferred"), 12000);
+            return;
+          }
+          const result = await this.folderSync.sync({ reason: "startup" });
+          if (result.status === "ok") this.diagnostics?.markSyncHealthy();
+          this.reportSync(result, false);
+        },
+      ],
+      ["episode-repair", () => this.repairEpisodeLists()],
+      [
+        "notifications",
+        async () => {
+          if (shouldRunDailyCheck(this.storage.settings.get())) {
+            await this.runNotificationCheckNow();
+          }
+        },
+      ],
+      [
+        "trakt-sync",
+        async () => {
+          const settings = this.storage.settings.get();
+          if (
+            settings.traktAccessToken &&
+            settings.traktAutoSync === "on_startup"
+          ) {
+            await this.runTraktSync({ auto: true });
+          }
+        },
+      ],
+      [
+        "note-sync",
+        async () => {
+          if (!this.isAutoNoteSyncEnabled()) return;
+          if (this.diagnostics?.startupSyncSuppressed) return;
+          await this.noteSync.checkOnStartup();
+        },
+      ],
+    ];
+
+    try {
+      for (const [name, step] of steps) {
+        if (this.unloaded) return;
+        try {
+          await step();
+        } catch (err) {
+          console.warn(
+            `MediaVault: startup step "${name}" failed`,
+            err instanceof Error ? err.message : "unknown error",
+          );
+        }
+        if (name === "folder-sync") this.startupSettled = true;
+      }
+    } finally {
+      this.startupSettled = true;
+      if (this.editSyncPending) {
+        this.editSyncPending = false;
+        this.requestEditSync();
+      }
+    }
+  }
+
+  private isAutoNoteSyncEnabled(): boolean {
+    return this.storage.settings.get().autoSyncNotes;
+  }
+
+  private setupNoteReconcileWatcher(): void {
+    this.registerEvent(
+      this.app.metadataCache.on("changed", (file) => {
+        if (this.unloaded || !this.startupSettled) return;
+        if (!(file instanceof TFile) || file.extension !== "md") return;
+        if (!this.isAutoNoteSyncEnabled()) return;
+        this.folderSync.queuePath(file.path);
+      }),
+    );
   }
 
   private setupNotificationSchedule(): void {
-    const tryRun = () => {
+    this.notificationCheckIntervalHandle = window.setInterval(() => {
+      if (this.unloaded || !this.startupSettled) return;
       if (shouldRunDailyCheck(this.storage.settings.get())) {
         void this.runNotificationCheckNow();
       }
-    };
-
-    window.setTimeout(tryRun, 5000);
-
-    this.notificationCheckIntervalHandle = window.setInterval(
-      tryRun,
-      60 * 60 * 1000,
-    );
+    }, 60 * 60 * 1000);
     this.registerInterval(this.notificationCheckIntervalHandle);
   }
 
-  async runNotificationCheckNow(): Promise<void> {
-    if (!this.storage.settings.get().tmdbApiKey) return;
+  private notificationCheckInFlight: Promise<"completed" | "failed" | "skipped"> | null =
+    null;
 
-    const settings = this.storage.settings.get();
-    let fired: Awaited<ReturnType<typeof runNotificationCheck>> = [];
-    try {
-      fired = await runNotificationCheck(this.storage, this.tmdb, settings);
-    } catch (err) {
-      console.error("MediaVault: notification check failed", err);
-    }
-
-    await this.storage.settings.update({
-      notificationLastCheckedDate: new Date().toISOString().slice(0, 10),
+  runNotificationCheckNow(): Promise<"completed" | "failed" | "skipped"> {
+    if (this.notificationCheckInFlight) return this.notificationCheckInFlight;
+    const run = this.executeNotificationCheck().finally(() => {
+      this.notificationCheckInFlight = null;
     });
+    this.notificationCheckInFlight = run;
+    return run;
+  }
 
-    if (!settings.notificationSilent) {
-      this.showNotificationToasts(fired);
-    }
-    if (fired.length > 0) {
-      this.refreshLibraryViews();
+  private async executeNotificationCheck(): Promise<
+    "completed" | "failed" | "skipped"
+  > {
+    if (!this.storage.settings.get().tmdbApiKey) return "skipped";
+    if (this.unloaded) return "skipped";
+
+    journalEvent("notification-check-requested", {
+      queued: this.storage.pipelineBusy,
+    });
+    const release = await this.storage.acquirePipelineWhenFree();
+    try {
+      if (this.unloaded) return "skipped";
+      const settings = this.storage.settings.get();
+      let fired: Awaited<ReturnType<typeof runNotificationCheck>> = [];
+      let failed = false;
+      const outcome = await trackOperation(
+        "notification-check",
+        async () => {
+          try {
+            fired = await runNotificationCheck(this.storage, this.tmdb, settings);
+          } catch (err) {
+            failed = true;
+            console.error(
+              "MediaVault: notification check failed",
+              err instanceof Error ? err.message : "unknown error",
+            );
+            return;
+          }
+          await this.storage.settings.update({
+            notificationLastCheckedDate: new Date().toISOString().slice(0, 10),
+          });
+        },
+        { exclusive: true },
+      );
+      if (!outcome.ran) return "skipped";
+      if (failed) return "failed";
+      if (!this.unloaded) {
+        if (!settings.notificationSilent) this.showNotificationToasts(fired);
+        if (fired.length > 0) this.refreshLibraryViews();
+      }
+      return "completed";
+    } finally {
+      release();
     }
   }
 
@@ -908,9 +1433,30 @@ export default class MediaVaultPlugin extends Plugin {
   }
 
   onunload() {
+    journalEvent("plugin-unload");
+    void this.diagnostics?.flush();
+    setJournal(null);
+    this.unloaded = true;
+    this.scheduledTimers.forEach((handle) => window.clearTimeout(handle));
+    this.scheduledTimers.clear();
+    if (this.mediaChangeDebounceHandle !== null) {
+      window.clearTimeout(this.mediaChangeDebounceHandle);
+      this.mediaChangeDebounceHandle = null;
+    }
+    if (this.storage) this.storage.media.onUpdated = undefined;
+    this.noteSync?.dispose();
+    this.folderSync?.dispose();
+    this.backup?.dispose();
     this.unsubscribeLocaleChange?.();
     teardownAndroidSafeArea();
-    void this.storage.flush();
+    if (this.storage) {
+      void this.storage.shutdown().catch((err) => {
+        console.error(
+          "MediaVault: could not save data on unload",
+          err instanceof Error ? err.message : "unknown error",
+        );
+      });
+    }
   }
 
   async saveSettings(patch?: Partial<MediaVaultSettings>): Promise<void> {

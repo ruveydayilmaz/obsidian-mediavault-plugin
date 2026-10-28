@@ -78,6 +78,7 @@ export interface MediaVaultSettings {
 
   mediaFolderPath: string;
   autoCreateNotes: boolean;
+  autoSyncNotes: boolean;
 
   defaultView: "grid" | "list" | "table";
 
@@ -121,6 +122,9 @@ export interface MediaVaultSettings {
   genreImageCache: Record<string, string>;
 
   noteTemplate: NoteTemplateSettings;
+  noteCustomMarkdown: string;
+  androidMenuOffsetPx: number;
+  backupKeepCount: number;
 
   noteSyncState: NoteSyncState;
 }
@@ -141,6 +145,7 @@ export const DEFAULT_SETTINGS: MediaVaultSettings = {
   traktHistoryNotePath: "MediaVault/Trakt Rating History.md",
   mediaFolderPath: "MediaVault",
   autoCreateNotes: false,
+  autoSyncNotes: true,
   defaultView: "grid",
   defaultSort: "recent",
   defaultSortDirection: "desc",
@@ -170,6 +175,10 @@ export const DEFAULT_SETTINGS: MediaVaultSettings = {
   favoriteListSortModes: { movies: "recent", tv: "recent" },
   favoriteListManualOrder: { movies: [], tv: [] },
   genreImageCache: {},
+
+  noteCustomMarkdown: "",
+  androidMenuOffsetPx: 0,
+  backupKeepCount: 30,
 
   noteTemplate: {
     optionalProperties: {

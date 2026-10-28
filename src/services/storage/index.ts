@@ -58,6 +58,108 @@ export class StorageService {
     this.settings = new SettingsRepository(this.adapter);
     this.customLists = new CustomListRepository(this.adapter);
     this.notifications = new NotificationRepository(this.adapter);
+
+    const touch = (record: { mediaId: string }) => this.touchMedia(record.mediaId);
+    this.watchSessions.onMutated = touch;
+    this.episodeProgress.onMutated = touch;
+    this.episodeWatches.onMutated = touch;
+    this.movieProgress.onMutated = touch;
+    this.comfortProfiles.onMutated = touch;
+  }
+
+  invalidateAll(): void {
+    [
+      this.media,
+      this.watchSessions,
+      this.episodes,
+      this.episodeProgress,
+      this.episodeWatches,
+      this.movieProgress,
+      this.comfortProfiles,
+      this.customLists,
+      this.notifications,
+    ].forEach((repo) => repo.invalidate());
+  }
+
+  private pipelineDepth = 0;
+
+  get pipelineBusy(): boolean {
+    return this.pipelineDepth > 0;
+  }
+
+  private pipelineWaiters: (() => void)[] = [];
+
+  acquirePipeline(): () => void {
+    this.pipelineDepth++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.pipelineDepth = Math.max(0, this.pipelineDepth - 1);
+      if (this.pipelineDepth === 0) this.pipelineWaiters.shift()?.();
+    };
+  }
+
+  async acquirePipelineWhenFree(): Promise<() => void> {
+    while (this.pipelineDepth > 0) {
+      await new Promise<void>((resolve) => this.pipelineWaiters.push(resolve));
+    }
+    return this.acquirePipeline();
+  }
+
+  releasePipelineWaiters(): void {
+    const waiters = this.pipelineWaiters;
+    this.pipelineWaiters = [];
+    waiters.forEach((wake) => wake());
+  }
+
+  private touchQueue = new Set<string>();
+  private touchTimer: number | null = null;
+  private touchSuppressed = 0;
+
+  private touchMedia(mediaId: string): void {
+    if (this.touchSuppressed > 0) return;
+    this.touchQueue.add(mediaId);
+    if (this.touchTimer !== null) return;
+    this.touchTimer = window.setTimeout(() => {
+      this.touchTimer = null;
+      void this.flushTouches();
+    }, 250);
+  }
+
+  async flushTouches(): Promise<void> {
+    if (this.touchTimer !== null) {
+      window.clearTimeout(this.touchTimer);
+      this.touchTimer = null;
+    }
+    const ids = [...this.touchQueue];
+    this.touchQueue.clear();
+    for (const id of ids) {
+      try {
+        await this.media.touch(id);
+      } catch (err) {
+        console.warn(
+          "MediaVault: could not update a media timestamp",
+          err instanceof Error ? err.message : "unknown error",
+        );
+      }
+    }
+  }
+
+  async shutdown(): Promise<void> {
+    this.releasePipelineWaiters();
+    await this.flushTouches();
+    this.adapter.dispose();
+    await this.adapter.flush();
+  }
+
+  async withoutTouch<T>(fn: () => Promise<T>): Promise<T> {
+    this.touchSuppressed++;
+    try {
+      return await fn();
+    } finally {
+      this.touchSuppressed--;
+    }
   }
 
   async initialize(): Promise<void> {

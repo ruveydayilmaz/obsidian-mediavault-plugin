@@ -12,7 +12,6 @@ export type LibraryFilter =
 export type ProgressTab =
   | "all"
   | "watching"
-  | "up_to_date"
   | "plan_to_watch"
   | "watch_later"
   | "finished"
@@ -25,7 +24,6 @@ export function getProgressTabs(): { value: ProgressTab; label: string }[] {
   return [
     { value: "all", label: t("library.tabAll") },
     { value: "watching", label: t("library.tabWatching") },
-    { value: "up_to_date", label: t("library.tabUpToDate") },
     { value: "plan_to_watch", label: t("library.tabPlanToWatch") },
     { value: "finished", label: t("library.tabFinished") },
     { value: "waiting_for_new_season", label: t("library.tabWaiting") },
@@ -36,7 +34,6 @@ export function getProgressTabs(): { value: ProgressTab; label: string }[] {
 export const PROGRESS_TABS: { value: ProgressTab; label: string }[] = [
   { value: "all", label: t("library.tabAll") },
   { value: "watching", label: t("library.tabWatching") },
-  { value: "up_to_date", label: t("library.tabUpToDate") },
   { value: "plan_to_watch", label: t("library.tabPlanToWatch") },
   { value: "finished", label: t("library.tabFinished") },
   { value: "waiting_for_new_season", label: t("library.tabWaiting") },
@@ -45,7 +42,6 @@ export const PROGRESS_TABS: { value: ProgressTab; label: string }[] = [
 
 const PROGRESS_TAB_STATUSES: Partial<Record<ProgressTab, MediaStatus[]>> = {
   watching: [MediaStatus.Watching, MediaStatus.Rewatching],
-  up_to_date: [MediaStatus.UpToDate],
   plan_to_watch: [MediaStatus.PlanToWatch],
   watch_later: [MediaStatus.WatchLater],
   finished: [MediaStatus.Completed],

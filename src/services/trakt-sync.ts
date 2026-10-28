@@ -157,6 +157,7 @@ async function pullShowEpisodeHistory(
       episode,
       true,
       item.watchedAt.slice(0, 10),
+      { silent: true },
     );
     marked++;
   }

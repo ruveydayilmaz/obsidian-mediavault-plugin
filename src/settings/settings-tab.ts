@@ -2,11 +2,13 @@ import {
   App,
   Notice,
   PluginSettingTab,
+  type Setting,
   Platform,
   setIcon,
   type SettingDefinitionItem,
 } from "obsidian";
 import type MediaVaultPlugin from "../main";
+import { normalizeSafeFolderPath } from "../utils/vault-path";
 import { RatingScale } from "../types/enums";
 import {
   type MediaVaultSettings,
@@ -25,6 +27,33 @@ import { TMDB_LANGUAGES } from "../api/tmdb-languages";
 import { resolveTmdbLanguage } from "../api/tmdb";
 import { makeClearable } from "../ui/components/clearable-input";
 import { FactoryResetModal } from "../ui/modals/factory-reset-modal";
+import { BackupsModal } from "../ui/modals/backups-modal";
+import {
+  ANDROID_MENU_OFFSET_MAX,
+  ANDROID_MENU_OFFSET_MIN,
+  ANDROID_MENU_OFFSET_STEP,
+  applyAndroidMenuOffset,
+  clampAndroidMenuOffset,
+} from "../utils/platform";
+
+const SUBPAGE_HEADING_KEYS = new Set([
+  "settings.tmdbSection",
+  "settings.traktSection",
+  "settings.vaultIntegrationSection",
+  "settings.noteTemplateSection",
+  "settings.displaySection",
+  "settings.notificationsSection",
+]);
+
+const SECTION_HEADING_KEYS = [
+  "settings.tmdbSection",
+  "settings.traktSection",
+  "settings.vaultIntegrationSection",
+  "settings.noteTemplateSection",
+  "settings.displaySection",
+  "settings.notificationsSection",
+  "factoryReset.sectionTitle",
+];
 
 const OPTIONAL_PROPERTY_CATALOG: {
   key: NoteTemplateOptionalPropertyKey;
@@ -67,6 +96,71 @@ export class MediaVaultSettingTab extends PluginSettingTab {
     this.plugin = plugin;
   }
 
+  private applySubpages(items: SettingDefinitionItem[]): SettingDefinitionItem[] {
+    const sectionNames = new Set(SECTION_HEADING_KEYS.map((k) => t(k)));
+    const subpageNames = new Set(
+      [...SUBPAGE_HEADING_KEYS].map((k) => t(k)),
+    );
+    const out: SettingDefinitionItem[] = [];
+    let page: { type: "page"; name: string; items: SettingDefinitionItem[] } | null =
+      null;
+
+    for (const item of items) {
+      const name = (item as { name?: string }).name;
+      if (name && sectionNames.has(name)) {
+        page = null;
+        if (subpageNames.has(name)) {
+          page = { type: "page", name, items: [] };
+          out.push(page);
+          continue;
+        }
+        out.push(item);
+        continue;
+      }
+      if (page) page.items.push(item);
+      else out.push(item);
+    }
+    return out;
+  }
+
+  private addInfoButton(
+    setting: Setting,
+    titleKey: string,
+    bodyKey: string,
+  ): void {
+    const infoBtn = setting.controlEl.createEl("button", {
+      cls: "clickable-icon mediavault-info-icon-btn",
+      attr: { "aria-label": t(titleKey) },
+    });
+    setIcon(infoBtn, "info");
+    infoBtn.addEventListener("click", () => {
+      new InfoModal(this.app, t(titleKey), t(bodyKey)).open();
+    });
+  }
+
+  private markWideInputRows(
+    items: SettingDefinitionItem[],
+  ): SettingDefinitionItem[] {
+    const TEXT_INPUT =
+      'input[type="text"], input[type="url"], input[type="search"], input[type="password"], input:not([type]), textarea';
+    for (const item of items) {
+      const anyItem = item as {
+        render?: (setting: Setting) => void;
+        items?: SettingDefinitionItem[];
+      };
+      if (anyItem.items) this.markWideInputRows(anyItem.items);
+      const original = anyItem.render;
+      if (!original) continue;
+      anyItem.render = (setting: Setting): void => {
+        original(setting);
+        if (setting.controlEl.querySelector(TEXT_INPUT)) {
+          setting.settingEl.addClass("mediavault-setting-wide-input");
+        }
+      };
+    }
+    return items;
+  }
+
   getSettingDefinitions(): SettingDefinitionItem[] {
     const settings = this.plugin.storage.settings;
 
@@ -107,31 +201,7 @@ export class MediaVaultSettingTab extends PluginSettingTab {
       },
     ];
 
-    return [
-      {
-        name: t("settings.title"),
-        render: (setting) => {
-          setting.setHeading();
-        },
-      },
-      {
-        name: t("settings.displayLanguage"),
-        desc: t("settings.languageDesc"),
-        render: (setting) => {
-          const options: Record<string, string> = {};
-          for (const loc of SUPPORTED_LOCALES) options[loc.code] = loc.label;
-          setting.addDropdown((dropdown) => {
-            dropdown
-              .addOptions(options)
-              .setValue(settings.get().language)
-              .onChange(async (value) => {
-                await this.plugin.setLanguage(value as Locale);
-                this.update();
-              });
-          });
-        },
-      },
-
+    return this.markWideInputRows(this.applySubpages([
       {
         name: t("settings.tmdbSection"),
         render: (setting) => {
@@ -139,7 +209,7 @@ export class MediaVaultSettingTab extends PluginSettingTab {
         },
       },
       {
-        name: t("settings.apiKey"),
+        name: t("settings.tmdbApiKey"),
         desc: t("settings.tmdbApiKeyDesc"),
         render: (setting) => {
           setting.addText((text) => {
@@ -227,22 +297,6 @@ export class MediaVaultSettingTab extends PluginSettingTab {
         },
       },
       {
-        name: t("settings.showLibraryCarousels"),
-        desc: t("settings.showLibraryCarouselsDesc"),
-        render: (setting) => {
-          setting.addToggle((toggle) =>
-            toggle
-              .setValue(settings.get().showLibraryCarousels)
-              .onChange(async (value) => {
-                await settings.update({ showLibraryCarousels: value });
-
-                this.plugin.refreshLibraryViews();
-              }),
-          );
-        },
-      },
-
-      {
         name: t("settings.traktSection"),
         render: (setting) => {
           setting.setHeading();
@@ -264,6 +318,7 @@ export class MediaVaultSettingTab extends PluginSettingTab {
       {
         name: t("settings.traktClientSecret"),
         render: (setting) => {
+          setting.setDesc(t("settings.traktClientSecretDesc"));
           setting.addText((text) => {
             text
               .setValue(settings.get().traktClientSecret)
@@ -442,9 +497,20 @@ export class MediaVaultSettingTab extends PluginSettingTab {
               .setPlaceholder("Mediavault")
               .setValue(settings.get().mediaFolderPath)
               .onChange(async (value) => {
-                await settings.update({
-                  mediaFolderPath: value.trim() || "Mediavault",
-                });
+                const trimmed = value.trim();
+                if (trimmed === "") {
+                  text.inputEl.removeClass("mod-error");
+                  await settings.update({ mediaFolderPath: "Mediavault" });
+                  return;
+                }
+                const safe = normalizeSafeFolderPath(trimmed);
+                text.inputEl.toggleClass("mod-error", safe === null);
+                text.inputEl.setAttribute(
+                  "aria-invalid",
+                  safe === null ? "true" : "false",
+                );
+                if (safe === null) return;
+                await settings.update({ mediaFolderPath: safe });
               });
             makeClearable(text.inputEl);
           });
@@ -489,16 +555,137 @@ export class MediaVaultSettingTab extends PluginSettingTab {
       },
 
       {
+        name: t("backup.settingName"),
+        desc: t("backup.settingDesc"),
+        render: (setting) => {
+          setting.addButton((btn) =>
+            btn.setButtonText(t("backup.viewButton")).onClick(() => {
+              new BackupsModal(this.app, this.plugin).open();
+            }),
+          );
+        },
+      },
+      {
+        name: t("backup.keepCount"),
+        desc: t("backup.keepCountDesc"),
+        render: (setting) => {
+          setting.addText((text) => {
+            text.inputEl.type = "number";
+            text.inputEl.min = "5";
+            text.inputEl.max = "500";
+            text
+              .setValue(String(settings.get().backupKeepCount))
+              .onChange(async (value) => {
+                const n = parseInt(value, 10);
+                if (!Number.isFinite(n)) return;
+                await settings.update({
+                  backupKeepCount: Math.max(5, Math.min(500, n)),
+                });
+              });
+          });
+        },
+      },
+      {
+        name: t("exportImport.settingName"),
+        desc: t("exportImport.settingDesc"),
+        render: (setting) => {
+          setting.addButton((btn) =>
+            btn.setButtonText(t("command.exportLibrary")).onClick(async () => {
+              await this.plugin.runExportLibrary();
+            }),
+          );
+          setting.addButton((btn) =>
+            btn
+              .setButtonText(t("command.importMediaVaultExport"))
+              .onClick(() => {
+                new MediaVaultImportExportModal(
+                  this.app,
+                  this.plugin.storage,
+                  () => {
+                    this.plugin.refreshLibraryViews();
+                    this.plugin.refreshListViews();
+                  },
+                ).open();
+              }),
+          );
+        },
+      },
+      {
+        name: t("settings.autoSyncNotes"),
+        desc: t("settings.autoSyncNotesDesc"),
+        render: (setting) => {
+          this.addInfoButton(
+            setting,
+            "settings.syncExperimentalInfoTitle",
+            "settings.syncExperimentalInfoBody",
+          );
+          setting.addToggle((toggle) =>
+            toggle
+              .setValue(settings.get().autoSyncNotes)
+              .onChange(async (value) => {
+                await settings.update({ autoSyncNotes: value });
+              }),
+          );
+        },
+      },
+      {
+        name: t("noteSync.settingName"),
+        desc: t("noteSync.settingDesc"),
+        render: (setting) => {
+          const state = settings.get().noteSyncState;
+          setting.setDesc(
+            state.lastSuccessfulSyncAt
+              ? t("noteSync.lastSynced", { date: state.lastSuccessfulSyncAt })
+              : t("noteSync.neverSynced"),
+          );
+          this.addInfoButton(
+            setting,
+            "settings.syncExperimentalInfoTitle",
+            "settings.syncExperimentalInfoBody",
+          );
+          setting.addButton((btn) =>
+            btn.setButtonText(t("noteSync.syncNow")).onClick(async () => {
+              await this.plugin.runManualNoteSync();
+              this.update();
+            }),
+          );
+        },
+      },
+
+      {
         name: t("settings.noteTemplateSection"),
         render: (setting) => {
           setting.setHeading();
         },
       },
       {
+        name: t("settings.noteCustomMarkdown"),
+        desc: t("settings.noteCustomMarkdownDesc"),
+        render: (setting) => {
+          let timer: number | null = null;
+          setting.addTextArea((area) => {
+            area
+              .setPlaceholder(t("settings.noteCustomMarkdownPlaceholder"))
+              .setValue(settings.get().noteCustomMarkdown ?? "")
+              .onChange((value) => {
+                void settings.update({ noteCustomMarkdown: value });
+
+                if (timer !== null) window.clearTimeout(timer);
+                timer = window.setTimeout(() => {
+                  timer = null;
+                  void this.plugin.refreshGeneratedNotes();
+                }, 1500);
+              });
+            area.inputEl.rows = 6;
+            area.inputEl.addClass("mediavault-custom-markdown-input");
+          });
+        },
+      },
+      {
         name: t("settings.noteTemplateRequiredProperties"),
         desc: `${t("settings.noteTemplateRequiredPropertiesDesc")} (type, title, tmdb_id, year)`,
         render: () => {
-          // Nothing to toggle here
+          // nothing to toggle here
         },
       },
       ...OPTIONAL_PROPERTY_CATALOG.map(
@@ -554,49 +741,6 @@ export class MediaVaultSettingTab extends PluginSettingTab {
         }),
       ),
       {
-        name: t("exportImport.settingName"),
-        desc: t("exportImport.settingDesc"),
-        render: (setting) => {
-          setting.addButton((btn) =>
-            btn.setButtonText(t("command.exportLibrary")).onClick(async () => {
-              await this.plugin.runExportLibrary();
-            }),
-          );
-          setting.addButton((btn) =>
-            btn
-              .setButtonText(t("command.importMediaVaultExport"))
-              .onClick(() => {
-                new MediaVaultImportExportModal(
-                  this.app,
-                  this.plugin.storage,
-                  () => {
-                    this.plugin.refreshLibraryViews();
-                    this.plugin.refreshListViews();
-                  },
-                ).open();
-              }),
-          );
-        },
-      },
-      {
-        name: t("noteSync.settingName"),
-        desc: t("noteSync.settingDesc"),
-        render: (setting) => {
-          const state = settings.get().noteSyncState;
-          setting.setDesc(
-            state.lastSuccessfulSyncAt
-              ? t("noteSync.lastSynced", { date: state.lastSuccessfulSyncAt })
-              : t("noteSync.neverSynced"),
-          );
-          setting.addButton((btn) =>
-            btn.setButtonText(t("noteSync.syncNow")).onClick(async () => {
-              await this.plugin.runManualNoteSync();
-              this.update();
-            }),
-          );
-        },
-      },
-      {
         name: t("settings.noteTemplateReset"),
         desc: t("settings.noteTemplateResetDesc"),
         render: (setting) => {
@@ -618,6 +762,40 @@ export class MediaVaultSettingTab extends PluginSettingTab {
           setting.setHeading();
         },
       },
+      {
+        name: t("settings.language"),
+        desc: t("settings.languageDesc"),
+        render: (setting) => {
+          const options: Record<string, string> = {};
+          for (const loc of SUPPORTED_LOCALES) options[loc.code] = loc.label;
+          setting.addDropdown((dropdown) => {
+            dropdown
+              .addOptions(options)
+              .setValue(settings.get().language)
+              .onChange(async (value) => {
+                await this.plugin.setLanguage(value as Locale);
+                this.update();
+              });
+          });
+        },
+      },
+
+      {
+        name: t("settings.showLibraryCarousels"),
+        desc: t("settings.showLibraryCarouselsDesc"),
+        render: (setting) => {
+          setting.addToggle((toggle) =>
+            toggle
+              .setValue(settings.get().showLibraryCarousels)
+              .onChange(async (value) => {
+                await settings.update({ showLibraryCarousels: value });
+
+                this.plugin.refreshLibraryViews();
+              }),
+          );
+        },
+      },
+
       {
         name: t("settings.defaultView"),
         visible: () => !Platform.isMobileApp,
@@ -655,6 +833,48 @@ export class MediaVaultSettingTab extends PluginSettingTab {
                 await settings.update({ ratingScale: value as RatingScale });
               }),
           );
+        },
+      },
+
+      {
+        name: t("settings.androidMenuOffset"),
+        desc: t("settings.androidMenuOffsetDesc"),
+        visible: () => Platform.isMobile,
+        render: (setting) => {
+          const controls = setting.controlEl.createDiv({
+            cls: "mediavault-android-offset-control",
+          });
+          const minus = controls.createEl("button", {
+            text: "−",
+            attr: { "aria-label": t("settings.androidMenuOffsetUp") },
+          });
+          const valueEl = controls.createSpan({
+            cls: "mediavault-android-offset-value",
+          });
+          const plus = controls.createEl("button", {
+            text: "+",
+            attr: { "aria-label": t("settings.androidMenuOffsetDown") },
+          });
+          const current = (): number =>
+            clampAndroidMenuOffset(settings.get().androidMenuOffsetPx);
+          const refresh = (): void => {
+            const v = current();
+            valueEl.setText(`${v > 0 ? "+" : ""}${v} px`);
+            minus.disabled = v <= ANDROID_MENU_OFFSET_MIN;
+            plus.disabled = v >= ANDROID_MENU_OFFSET_MAX;
+          };
+          const change = (delta: number): void => {
+            const next = clampAndroidMenuOffset(current() + delta);
+            if (next === current()) return;
+
+            applyAndroidMenuOffset(next);
+            void settings.update({ androidMenuOffsetPx: next });
+            refresh();
+          };
+
+          minus.addEventListener("click", () => change(-ANDROID_MENU_OFFSET_STEP));
+          plus.addEventListener("click", () => change(ANDROID_MENU_OFFSET_STEP));
+          refresh();
         },
       },
 
@@ -743,9 +963,18 @@ export class MediaVaultSettingTab extends PluginSettingTab {
           setting
             .addButton((btn) =>
               btn.setButtonText(t("settings.checkNow")).onClick(async () => {
-                await this.plugin.runNotificationCheckNow();
-                new Notice(t("settings.checkNowComplete"));
-                this.update();
+                btn.setDisabled(true);
+                btn.setButtonText(t("settings.checkNowRunning"));
+                try {
+                  const status = await this.plugin.runNotificationCheckNow();
+                  if (status === "completed") {
+                    new Notice(t("settings.checkNowComplete"));
+                  } else if (status === "failed") {
+                    new Notice(t("settings.checkNowFailed"));
+                  }
+                } finally {
+                  this.update();
+                }
               }),
             )
             .addButton((btn) =>
@@ -780,6 +1009,6 @@ export class MediaVaultSettingTab extends PluginSettingTab {
           );
         },
       },
-    ];
+    ]));
   }
 }

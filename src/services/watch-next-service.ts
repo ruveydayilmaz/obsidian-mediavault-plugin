@@ -25,7 +25,6 @@ const NEW_BADGE_WINDOW_DAYS = 7;
 const IN_PROGRESS_STATUSES: ReadonlySet<MediaStatus> = new Set([
   MediaStatus.Watching,
   MediaStatus.Rewatching,
-  MediaStatus.UpToDate,
   MediaStatus.WaitingForNewSeason,
 ]);
 

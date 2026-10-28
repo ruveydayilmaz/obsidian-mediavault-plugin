@@ -1,3 +1,4 @@
+import { recordListDeletion } from "../../services/sync-tombstones";
 import { App, Modal, Notice, Menu, setIcon } from "obsidian";
 import { renderInlineBackButton } from "./modal-chrome";
 import type { StorageService } from "../../services/storage";
@@ -54,11 +55,26 @@ export class ListDetailModal extends Modal {
 
   onOpen(): void {
     this.plugin.registerLocaleAwareModal(this);
+    this.plugin.registerListDetailModal(this);
     void this.render();
+  }
+
+  private refreshChain: Promise<void> = Promise.resolve();
+
+  refreshInPlace(): void {
+    this.refreshChain = this.refreshChain.then(async () => {
+      const scrollers = [this.modalEl, this.contentEl];
+      const tops = scrollers.map((el) => el.scrollTop);
+      await this.render();
+      scrollers.forEach((el, i) => {
+        el.scrollTop = tops[i];
+      });
+    });
   }
 
   onClose(): void {
     this.plugin.unregisterLocaleAwareModal(this);
+    this.plugin.unregisterListDetailModal(this);
     this.contentEl.empty();
   }
 
@@ -391,6 +407,7 @@ export class ListDetailModal extends Modal {
   }
 
   private async deleteList(): Promise<void> {
+    await recordListDeletion(this.app, this.storage, this.list);
     await this.storage.customLists.delete(this.list.id);
     new Notice(t("lists.deletedNotice", { title: this.list.title }));
     this.notifyChanged();
@@ -486,6 +503,7 @@ export class ListDetailModal extends Modal {
               listTitle,
               onRemoved: () => void this.refreshAfterListRemoval(),
             },
+        () => this.refreshInPlace(),
       );
     });
   }

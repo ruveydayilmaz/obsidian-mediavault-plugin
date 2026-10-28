@@ -63,7 +63,7 @@ export class AnalyticsView extends ItemView {
 
     const [media, sessions, episodes, episodeProgress] = await Promise.all([
       this.plugin.storage.media.getAll(),
-      this.plugin.storage.watchSessions.getAll(),
+      this.plugin.storage.watchSessions.findWhere((s) => !s.inProgress),
       this.plugin.storage.episodes.getAll(),
       this.plugin.storage.episodeProgress.getAll(),
     ]);

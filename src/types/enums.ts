@@ -17,7 +17,6 @@ export enum MediaStatus {
   ComfortMedia = "comfort_media",
   Favorite = "favorite",
   WaitingForNewSeason = "waiting_for_new_season",
-  UpToDate = "up_to_date",
 }
 
 export enum WatchSource {

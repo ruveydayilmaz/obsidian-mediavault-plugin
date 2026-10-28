@@ -5,6 +5,10 @@ import {
   CURRENT_SCHEMA_VERSION,
 } from "./schema";
 import { runMigrations } from "./migrations";
+import { journalEvent } from "../operation-log";
+import { utf8Length } from "../../utils/utf8";
+import { digestString } from "../../utils/hash53";
+import { yieldToEventLoop } from "../importer/yield";
 
 const SAVE_DEBOUNCE_MS = 400;
 
@@ -42,7 +46,9 @@ export class StorageAdapter {
   private savePromise: Promise<void> | null = null;
   private resolveSavePromise: (() => void) | null = null;
 
-  private lastWrittenJson = new Map<StorageGroup, string>();
+  private lastWrittenDigest = new Map<StorageGroup, string>();
+  private flushChain: Promise<void> = Promise.resolve();
+  readonly loadWarnings: string[] = [];
 
   constructor(plugin: Plugin) {
     this.plugin = plugin;
@@ -100,9 +106,7 @@ export class StorageAdapter {
     const empty = createEmptyVaultData();
     const results = await Promise.all(
       ALL_GROUPS.map(async (group) => {
-        const partial = await this.readJson<Partial<VaultData>>(
-          this.groupPath(group),
-        );
+        const partial = await this.readGroupFile(group);
         return { group, partial };
       }),
     );
@@ -126,7 +130,10 @@ export class StorageAdapter {
       : merged;
 
     for (const group of ALL_GROUPS) {
-      this.lastWrittenJson.set(group, JSON.stringify(this.dataForGroup(group)));
+      this.lastWrittenDigest.set(
+        group,
+        digestString(JSON.stringify(this.dataForGroup(group))),
+      );
     }
 
     if (needsMigration) {
@@ -155,6 +162,73 @@ export class StorageAdapter {
     }
   }
 
+  private async tryParse(path: string): Promise<Partial<VaultData> | null> {
+    try {
+      if (!(await this.adapter.exists(path))) return null;
+      const parsed = JSON.parse(
+        await this.adapter.read(path),
+      ) as Partial<VaultData> | null;
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed;
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async readGroupFile(
+    group: StorageGroup,
+  ): Promise<Partial<VaultData> | null> {
+    const path = this.groupPath(group);
+    const tmpPath = `${path}.tmp`;
+    const mainExists = await this.adapter.exists(path).catch(() => false);
+    const main = await this.tryParse(path);
+    if (main) return main;
+
+    const recovered = await this.tryParse(tmpPath);
+    if (recovered) {
+      console.warn(
+        `MediaVault: recovered "${fileNameForGroup(group)}" from an interrupted write`,
+      );
+      return recovered;
+    }
+
+    if (mainExists) {
+      const aside = `${path}.corrupt-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+      try {
+        await this.adapter.rename(path, aside);
+        this.loadWarnings.push(fileNameForGroup(group));
+        console.error(
+          `MediaVault: "${fileNameForGroup(group)}" could not be parsed; kept as "${aside}"`,
+        );
+      } catch (err) {
+        console.error(
+          `MediaVault: "${fileNameForGroup(group)}" is unreadable and could not be set aside`,
+          err instanceof Error ? err.message : "unknown error",
+        );
+        throw new Error(
+          `MediaVault data file "${fileNameForGroup(group)}" is damaged and could not be preserved`,
+        );
+      }
+    }
+    return null;
+  }
+
+  private async writeAtomic(path: string, json: string): Promise<void> {
+    const tmpPath = `${path}.tmp`;
+    await this.adapter.write(tmpPath, json);
+    const stat = await this.adapter.stat(tmpPath);
+    const expected = utf8Length(json);
+    if (!stat || stat.size !== expected) {
+      throw new Error(
+        `incomplete write to "${tmpPath}" (${stat?.size ?? 0} of ${expected} bytes)`,
+      );
+    }
+    if (await this.adapter.exists(path)) await this.adapter.remove(path);
+    await this.adapter.rename(tmpPath, path);
+  }
+
   private async ensureDir(): Promise<void> {
     if (!(await this.adapter.exists(this.storageDir))) {
       await this.adapter.mkdir(this.storageDir);
@@ -164,8 +238,8 @@ export class StorageAdapter {
   private async writeGroup(group: StorageGroup): Promise<void> {
     await this.ensureDir();
     const json = JSON.stringify(this.dataForGroup(group));
-    await this.adapter.write(this.groupPath(group), json);
-    this.lastWrittenJson.set(group, json);
+    await this.writeAtomic(this.groupPath(group), json);
+    this.lastWrittenDigest.set(group, digestString(json));
   }
 
   private async writeAllGroups(): Promise<void> {
@@ -190,10 +264,13 @@ export class StorageAdapter {
       window.clearTimeout(this.saveTimeout);
       this.saveTimeout = null;
     }
+    const pending = this.resolveSavePromise;
     this.savePromise = null;
     this.resolveSavePromise = null;
-    this.lastWrittenJson.clear();
+    pending?.();
+    this.lastWrittenDigest.clear();
 
+    await this.flushChain;
     await this.removePathIfExists(this.storageDir);
     await this.removePathIfExists(this.legacyDataPath);
 
@@ -233,40 +310,76 @@ export class StorageAdapter {
         this.resolveSavePromise = resolve;
       });
     }
+    const promise = this.savePromise;
 
     this.saveTimeout = window.setTimeout(() => {
-      void this.flush().then(() => {
-        this.resolveSavePromise?.();
-        this.savePromise = null;
-        this.resolveSavePromise = null;
+      this.saveTimeout = null;
+      this.flush().catch((err) => {
+        console.error(
+          "MediaVault: could not save data",
+          err instanceof Error ? err.message : "unknown error",
+        );
       });
     }, SAVE_DEBOUNCE_MS);
 
-    return this.savePromise;
+    return promise;
   }
 
-  async flush(): Promise<void> {
+  dispose(): void {
     if (this.saveTimeout) {
       window.clearTimeout(this.saveTimeout);
       this.saveTimeout = null;
     }
+  }
+
+  flush(): Promise<void> {
+    if (this.saveTimeout) {
+      window.clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
+    const pending = this.resolveSavePromise;
+    this.savePromise = null;
+    this.resolveSavePromise = null;
+
+    const run = this.flushChain.then(() => this.writeDirtyGroups());
+    this.flushChain = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run.finally(() => pending?.());
+  }
+
+  private async writeDirtyGroups(): Promise<void> {
     this.data.version = CURRENT_SCHEMA_VERSION;
 
-    const candidates = ALL_GROUPS.map((group) => ({
-      group,
-      json: JSON.stringify(this.dataForGroup(group)),
-    }));
-    const dirty = candidates.filter(
-      ({ group, json }) => json !== this.lastWrittenJson.get(group),
-    );
-
-    if (dirty.length === 0) return;
-    await this.ensureDir();
-    await Promise.all(
-      dirty.map(async ({ group, json }) => {
-        await this.adapter.write(this.groupPath(group), json);
-        this.lastWrittenJson.set(group, json);
-      }),
-    );
+    let firstError: Error | null = null;
+    let ensured = false;
+    for (const group of ALL_GROUPS) {
+      const startedAt = Date.now();
+      let json: string | null = JSON.stringify(this.dataForGroup(group));
+      const digest = digestString(json);
+      if (digest === this.lastWrittenDigest.get(group)) {
+        json = null;
+        continue;
+      }
+      journalEvent("cache-write", {
+        group,
+        chars: json.length,
+        serializeMs: Date.now() - startedAt,
+      });
+      try {
+        if (!ensured) {
+          await this.ensureDir();
+          ensured = true;
+        }
+        await this.writeAtomic(this.groupPath(group), json);
+        this.lastWrittenDigest.set(group, digest);
+      } catch (err) {
+        firstError ??= err instanceof Error ? err : new Error(String(err));
+      }
+      json = null;
+      await yieldToEventLoop();
+    }
+    if (firstError) throw firstError;
   }
 }

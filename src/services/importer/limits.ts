@@ -1,0 +1,1 @@
+export const MAX_IMPORT_FILE_BYTES = 256 * 1024 * 1024;

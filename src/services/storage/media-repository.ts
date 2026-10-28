@@ -17,9 +17,28 @@ export class MediaRepository extends BaseRepository<MediaItem> {
 
   async create(input: NewMediaItemInput): Promise<MediaItem> {
     const now = new Date().toISOString();
+    return this.save(this.buildItem(generateId(), input, now, now));
+  }
 
+  async restore(
+    input: NewMediaItemInput & {
+      id: MediaVaultId;
+      createdAt: string;
+      updatedAt: string;
+    },
+  ): Promise<MediaItem> {
+    const { id, createdAt, updatedAt, ...rest } = input;
+    return this.save(this.buildItem(id, rest, createdAt, updatedAt));
+  }
+
+  private buildItem(
+    id: MediaVaultId,
+    input: NewMediaItemInput,
+    createdAt: string,
+    updatedAt: string,
+  ): MediaItem {
     const item: MediaItem = {
-      id: generateId(),
+      id,
       originalTitle: null,
       tvdbId: null,
       imdbId: null,
@@ -53,11 +72,11 @@ export class MediaRepository extends BaseRepository<MediaItem> {
       notePath: null,
       episodesLastSyncedAt: null,
       ...input,
-      createdAt: now,
-      updatedAt: now,
+      createdAt,
+      updatedAt,
     };
 
-    return this.save(item);
+    return item;
   }
 
   async update(
@@ -66,10 +85,14 @@ export class MediaRepository extends BaseRepository<MediaItem> {
   ): Promise<MediaItem | null> {
     const result = await super.update(id, {
       ...patch,
-      updatedAt: new Date().toISOString(),
+      updatedAt: patch.updatedAt ?? new Date().toISOString(),
     });
     if (result) this.onUpdated?.(id);
     return result;
+  }
+
+  async touch(id: MediaVaultId): Promise<void> {
+    await this.update(id, {});
   }
 
   async findByTmdbId(

@@ -22,6 +22,7 @@ import {
 import { NormalizedImportBundle } from "../../services/importer/tvtime/types";
 import { ImportTimer } from "../../services/importer/import-timer";
 import { t } from "../../i18n";
+import { MAX_IMPORT_FILE_BYTES } from "../../services/importer/limits";
 
 export class ImportModal extends Modal {
   private storage: StorageService;
@@ -123,6 +124,11 @@ export class ImportModal extends Modal {
     if (!file) return;
 
     this.fileName = file.name;
+
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      new Notice(t("import.fileTooLarge"));
+      return;
+    }
 
     if (/\.zip$/i.test(file.name)) {
       await this.runZipDetectionAndPreview(await file.arrayBuffer());

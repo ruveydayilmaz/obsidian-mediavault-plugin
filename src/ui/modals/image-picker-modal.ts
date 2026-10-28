@@ -146,7 +146,7 @@ export class ImagePickerModal extends Modal {
 
   private async handleUrlSubmitted(url: string): Promise<void> {
     if (!url) return;
-    if (!/^https?:\/\//i.test(url)) {
+    if (!isRemoteImageUrl(url, { httpsOnly: true })) {
       new Notice(t("detail.invalidImageUrl"));
       return;
     }
