@@ -37,6 +37,8 @@ export interface MediaSyncPayload {
     droppedReason: string | null;
     notes: string;
     tags: string[];
+    posterPath?: string | null;
+    backdropPath?: string | null;
   };
   sessions: WatchSession[];
   episodes: PayloadEpisode[];
@@ -124,6 +126,8 @@ export async function buildMediaPayload(
       droppedReason: media.droppedReason,
       notes: media.notes,
       tags: media.tags,
+      posterPath: media.posterPath,
+      backdropPath: media.backdropPath,
     },
     sessions,
     episodes,

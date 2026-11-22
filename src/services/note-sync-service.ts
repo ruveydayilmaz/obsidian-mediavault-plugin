@@ -3,6 +3,8 @@ import type { StorageService } from "./storage";
 import type { MediaItem } from "../models/media";
 import type { NoteSyncState } from "../settings/settings";
 import { generateMediaNote } from "./note-generator/media-note-generator";
+import { generateListNote } from "./list-note-generator";
+import { generateAllPresetNotes } from "./comfort-preset-note-generator";
 import { mapWithConcurrency } from "./importer/concurrency";
 import { maybeYield } from "./importer/yield";
 import { confirmDialog } from "../ui/modals/confirm-modal";
@@ -22,6 +24,7 @@ export class NoteSyncService {
   private running = false;
   private disposed = false;
   private deferredThisSession = false;
+  onSettled: (() => void) | null = null;
 
   constructor(
     private app: App,
@@ -47,6 +50,39 @@ export class NoteSyncService {
       if (!latest || item.updatedAt > latest) latest = item.updatedAt;
     }
     return latest;
+  }
+
+  private async changedLists(since: string | null) {
+    return this.storage.customLists.findWhere(
+      (l) => since === null || l.updatedAt > since,
+    );
+  }
+
+  private async changedPresets(since: string | null) {
+    return this.storage.comfortPresets.findWhere(
+      (p) => !p.isBuiltIn && (since === null || !p.updatedAt || p.updatedAt > since),
+    );
+  }
+
+  private async syncListNotes(since: string | null): Promise<void> {
+    if ((await this.changedPresets(since)).length > 0) {
+      await generateAllPresetNotes(this.app, this.storage);
+    }
+    const lists = await this.changedLists(since);
+    for (let i = 0; i < lists.length; i++) {
+      if (this.disposed) return;
+      try {
+        await generateListNote(this.app, this.storage, lists[i], undefined, {
+          respectNewerNote: true,
+        });
+      } catch (err) {
+        console.warn(
+          `MediaVault: note sync failed for list "${lists[i].title}" (${lists[i].id})`,
+          err,
+        );
+      }
+      await maybeYield(i + 1, YIELD_EVERY);
+    }
   }
 
   private state(): NoteSyncState {
@@ -93,22 +129,35 @@ export class NoteSyncService {
     await this.checkAndSyncIfNeeded();
   }
 
+  private async computeNeedsSync(): Promise<boolean> {
+    const state = this.state();
+    if (state.lastSuccessfulSyncAt === null) return true;
+    const syncable = await this.syncableMedia();
+    const latest = this.latestUpdatedAt(syncable);
+    if (latest !== null && latest > state.lastSuccessfulSyncAt) return true;
+    return (
+      (await this.changedLists(state.lastSuccessfulSyncAt)).length > 0 ||
+      (await this.changedPresets(state.lastSuccessfulSyncAt)).length > 0
+    );
+  }
+
+  async hasPendingChanges(): Promise<boolean> {
+    if (this.disposed) return false;
+    const status = this.state().status;
+    if (status === "interrupted" || status === "failed") return true;
+    return this.computeNeedsSync();
+  }
+
   async checkAndSyncIfNeeded(): Promise<void> {
     if (this.disposed || this.running) return;
 
     if (this.storage.pipelineBusy) return;
 
-    const state = this.state();
-    if (state.status === "syncing") return;
+    if (this.state().status === "syncing") {
+      await this.patchState({ status: "interrupted" });
+    }
 
-    const syncable = await this.syncableMedia();
-    const latest = this.latestUpdatedAt(syncable);
-
-    const needsSync =
-      state.lastSuccessfulSyncAt === null ||
-      (latest !== null && latest > state.lastSuccessfulSyncAt);
-
-    if (!needsSync) return;
+    if (!(await this.hasPendingChanges())) return;
 
     await this.runSync({ resume: false });
   }
@@ -168,6 +217,8 @@ export class NoteSyncService {
     } finally {
       this.running = false;
       release();
+      const settled = this.onSettled;
+      if (settled && !this.disposed) window.setTimeout(settled, 0);
     }
   }
 
@@ -177,6 +228,8 @@ export class NoteSyncService {
     manual?: boolean;
   }): Promise<void> {
     {
+      const listPhaseStart = new Date().toISOString();
+      await this.syncListNotes(this.state().lastSuccessfulSyncAt);
       let queue = await this.computeQueue(opts.resume);
       journalEvent("note-sync-queue", {
         changed: queue.length,
@@ -281,6 +334,7 @@ export class NoteSyncService {
         passStart = checkAt;
       }
 
+      await this.syncListNotes(listPhaseStart);
       const completedAt = new Date().toISOString();
       if (converged && allFailedIds.size === 0) {
         await this.patchState({

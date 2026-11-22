@@ -101,6 +101,10 @@ import { SyncProgressModal } from "./ui/modals/sync-progress-modal";
 
 const STARTUP_DELAY_MS = 1500;
 
+const NOTIFICATION_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_SYNC_FOLLOW_UPS = 3;
+const SYNC_RETRY_BASE_MS = 15000;
+
 export default class MediaVaultPlugin extends Plugin {
   storage!: StorageService;
   tmdb!: TMDBService;
@@ -204,6 +208,25 @@ export default class MediaVaultPlugin extends Plugin {
         this.requestEditSync();
       }, 4000);
     };
+
+    const onSyncedRecordMutated = () => {
+      if (this.unloaded) return;
+      this.mediaUpdateEvents++;
+      if (this.mediaChangeDebounceHandle !== null) {
+        window.clearTimeout(this.mediaChangeDebounceHandle);
+      }
+      this.mediaChangeDebounceHandle = window.setTimeout(() => {
+        this.mediaChangeDebounceHandle = null;
+        this.requestEditSync();
+      }, 4000);
+    };
+    this.storage.customLists.onMutated = onSyncedRecordMutated;
+    this.storage.comfortPresets.onMutated = onSyncedRecordMutated;
+
+    this.noteSync.onSettled = () => {
+      void this.handleNoteSyncSettled();
+    };
+    this.setupLifecycleHandlers();
 
     this.tmdb = new TMDBService({
       getApiKey: () => this.storage.settings.get().tmdbApiKey,
@@ -579,7 +602,9 @@ export default class MediaVaultPlugin extends Plugin {
       const path = resolveListNotePath(base.replace(/\/+$/, ""), list);
       if (this.app.vault.getAbstractFileByPath(path) instanceof TFile) {
         try {
-          await generateListNote(this.app, this.storage, list, path);
+          await generateListNote(this.app, this.storage, list, path, {
+            respectNewerNote: true,
+          });
         } catch (err) {
           console.warn(`MediaVault: could not refresh list note "${list.title}"`, err);
         }
@@ -1246,6 +1271,64 @@ export default class MediaVaultPlugin extends Plugin {
     });
   }
 
+  private syncFollowUps = 0;
+  private syncRetryHandle: number | null = null;
+
+  private handleNoteSyncSettled = async (): Promise<void> => {
+    if (this.unloaded || !this.startupSettled || !this.isAutoNoteSyncEnabled()) return;
+    let pending = false;
+    try {
+      pending = await this.noteSync.hasPendingChanges();
+    } catch {
+      return;
+    }
+    if (!pending) {
+      this.syncFollowUps = 0;
+      return;
+    }
+    if (this.syncFollowUps >= MAX_SYNC_FOLLOW_UPS) return;
+    const status = this.storage.settings.get().noteSyncState.status;
+    const failed = status === "failed" || status === "interrupted";
+    const delay = failed ? SYNC_RETRY_BASE_MS * 2 ** this.syncFollowUps : 0;
+    this.syncFollowUps++;
+    if (this.syncRetryHandle !== null) window.clearTimeout(this.syncRetryHandle);
+    this.syncRetryHandle = window.setTimeout(() => {
+      this.syncRetryHandle = null;
+      this.requestEditSync();
+    }, delay);
+  };
+
+  private flushEditSyncDebounce(): void {
+    if (this.mediaChangeDebounceHandle === null) return;
+    window.clearTimeout(this.mediaChangeDebounceHandle);
+    this.mediaChangeDebounceHandle = null;
+    this.requestEditSync();
+  }
+
+  private setupLifecycleHandlers(): void {
+    const onHidden = () => {
+      if (this.unloaded) return;
+      void this.storage
+        .flushPending()
+        .catch(() => undefined)
+        .finally(() => this.flushEditSyncDebounce());
+    };
+    const onVisible = () => {
+      if (this.unloaded || !this.startupSettled) return;
+      this.syncFollowUps = 0;
+      this.requestEditSync();
+      if (shouldRunDailyCheck(this.storage.settings.get())) {
+        void this.runNotificationCheckNow();
+      }
+    };
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState === "hidden") onHidden();
+      else onVisible();
+    });
+    this.registerDomEvent(window, "pagehide", onHidden);
+    this.registerDomEvent(window, "pageshow", onVisible);
+  }
+
   private scheduleStartupSequence(): void {
     this.app.workspace.onLayoutReady(() => {
       this.scheduleTask(STARTUP_DELAY_MS, () => {
@@ -1369,7 +1452,24 @@ export default class MediaVaultPlugin extends Plugin {
     journalEvent("notification-check-requested", {
       queued: this.storage.pipelineBusy,
     });
-    const release = await this.storage.acquirePipelineWhenFree();
+    let timedOut = false;
+    const deadline = window.setTimeout(() => {
+      timedOut = true;
+    }, NOTIFICATION_CHECK_TIMEOUT_MS);
+    const abortSignal = {
+      get aborted(): boolean {
+        return timedOut || isUnloaded();
+      },
+    };
+    const isUnloaded = (): boolean => this.unloaded;
+    const runExclusive = async <T>(fn: () => Promise<T>): Promise<T> => {
+      const release = await this.storage.acquirePipelineWhenFree();
+      try {
+        return await fn();
+      } finally {
+        release();
+      }
+    };
     try {
       if (this.unloaded) return "skipped";
       const settings = this.storage.settings.get();
@@ -1379,7 +1479,13 @@ export default class MediaVaultPlugin extends Plugin {
         "notification-check",
         async () => {
           try {
-            fired = await runNotificationCheck(this.storage, this.tmdb, settings);
+            fired = await runNotificationCheck(
+              this.storage,
+              this.tmdb,
+              settings,
+              new Date(),
+              { runExclusive, signal: abortSignal },
+            );
           } catch (err) {
             failed = true;
             console.error(
@@ -1402,7 +1508,7 @@ export default class MediaVaultPlugin extends Plugin {
       }
       return "completed";
     } finally {
-      release();
+      window.clearTimeout(deadline);
     }
   }
 
@@ -1444,6 +1550,12 @@ export default class MediaVaultPlugin extends Plugin {
       this.mediaChangeDebounceHandle = null;
     }
     if (this.storage) this.storage.media.onUpdated = undefined;
+    if (this.storage) this.storage.customLists.onMutated = undefined;
+    if (this.storage) this.storage.comfortPresets.onMutated = undefined;
+    if (this.syncRetryHandle !== null) {
+      window.clearTimeout(this.syncRetryHandle);
+      this.syncRetryHandle = null;
+    }
     this.noteSync?.dispose();
     this.folderSync?.dispose();
     this.backup?.dispose();

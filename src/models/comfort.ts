@@ -64,6 +64,8 @@ export interface ComfortPreset {
   seasonalTags: Season[];
 
   isBuiltIn: boolean;
+
+  updatedAt?: ISODateString;
 }
 
 export interface ComfortMatch {

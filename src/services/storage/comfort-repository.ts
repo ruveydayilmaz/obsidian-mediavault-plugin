@@ -73,7 +73,22 @@ export class ComfortPresetRepository extends BaseRepository<ComfortPreset> {
   async create(
     input: Omit<ComfortPreset, "id" | "isBuiltIn">,
   ): Promise<ComfortPreset> {
-    return this.save({ id: generateId(), isBuiltIn: false, ...input });
+    return this.save({
+      id: generateId(),
+      isBuiltIn: false,
+      updatedAt: new Date().toISOString(),
+      ...input,
+    });
+  }
+
+  async update(
+    id: string,
+    patch: Partial<ComfortPreset>,
+  ): Promise<ComfortPreset | null> {
+    return super.update(id, {
+      ...patch,
+      updatedAt: patch.updatedAt ?? new Date().toISOString(),
+    });
   }
 }
 

@@ -3,7 +3,7 @@ import type { StorageService } from "./storage";
 import { MediaItem } from "../models/media";
 import { CustomList } from "../models/list";
 import { MediaStatus } from "../types/enums";
-import { parseListMediaIdsFromBody } from "./list-note-generator";
+import { buildMediaTitleIndex, parseListNote } from "./list-note-generator";
 import { t } from "../i18n";
 
 export type ReconcileOutcome = "updated" | "conflict" | "unchanged" | "ignored";
@@ -205,31 +205,29 @@ export async function reconcileListNote(
   const description = typeof fm.description === "string" ? fm.description : null;
   const sortMode = typeof fm.sort_mode === "string" ? fm.sort_mode : null;
 
+  const content = await app.vault.adapter.read(file.path);
+  const index =
+    opts.titleIndex ?? buildMediaTitleIndex(await storage.media.getAll());
+  const parsed = parseListNote(content, index);
+  const mediaIds = parsed.unresolved > 0 ? local.mediaIds : parsed.mediaIds;
+
   if (noteUpdatedAt > local.updatedAt) {
-    const content = await app.vault.adapter.read(file.path);
-    const mediaIds = await parseListMediaIdsFromBody(
-      storage,
-      content,
-      opts.titleIndex,
-    );
-    await storage.customLists.update(local.id, {
+    const patch: Partial<CustomList> = {
       title: title ?? local.title,
       description,
       sortMode: (sortMode ?? local.sortMode) as CustomList["sortMode"],
       mediaIds,
       updatedAt: noteUpdatedAt,
-    });
+    };
+    if (parsed.extras.isPublic !== undefined) patch.isPublic = parsed.extras.isPublic;
+    if (parsed.extras.posterUrl !== undefined) patch.posterUrl = parsed.extras.posterUrl;
+    if (parsed.extras.bannerUrl !== undefined) patch.bannerUrl = parsed.extras.bannerUrl;
+    await storage.customLists.update(local.id, patch);
     return "updated";
   }
 
   if (noteUpdatedAt < local.updatedAt) return "unchanged";
 
-  const content = await app.vault.adapter.read(file.path);
-  const mediaIds = await parseListMediaIdsFromBody(
-    storage,
-    content,
-    opts.titleIndex,
-  );
   if (listPatchDiffers(local, title, description, sortMode, mediaIds)) {
     console.warn(
       `MediaVault: sync conflict for list "${local.title}" (${local.id}) note and cache changed at the same logical version; keeping the local cache.`,

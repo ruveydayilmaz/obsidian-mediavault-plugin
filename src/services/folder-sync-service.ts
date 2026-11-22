@@ -13,6 +13,7 @@ import {
   generateListNote,
   restoreListFromNote,
 } from "./list-note-generator";
+import { generatePresetNote, syncPresetNote } from "./comfort-preset-note-generator";
 import { generateMediaNote } from "./note-generator/media-note-generator";
 import {
   applyMediaPayload,
@@ -345,6 +346,7 @@ export class FolderSyncService {
       // scan folder
       const mediaNotes = new Map<string, { file: TFile; fm: Fm }>();
       const listNotes = new Map<string, { file: TFile; fm: Fm }>();
+      const presetNotes = new Map<string, { file: TFile; fm: Fm }>();
       const tombstones = new Map<string, { deletedAt: string; file: TFile }>();
       const total = files.length;
       const needsRepair = new Set<string>();
@@ -369,6 +371,13 @@ export class FolderSyncService {
             } else if (typeof fm.mediavault_id === "string") {
               if (!mediaNotes.has(fm.mediavault_id)) {
                 mediaNotes.set(fm.mediavault_id, { file, fm });
+              }
+            } else if (
+              fm.mediavault_comfort_preset === true &&
+              typeof fm.mediavault_preset_id === "string"
+            ) {
+              if (!presetNotes.has(fm.mediavault_preset_id)) {
+                presetNotes.set(fm.mediavault_preset_id, { file, fm });
               }
             } else if (
               fm.mediavault_list === true &&
@@ -587,6 +596,7 @@ export class FolderSyncService {
 
       if (this.disposed) return result;
       await this.syncLists(listNotes, tombstones, result, opts, needsRepair);
+      await this.syncPresets(presetNotes, result, opts);
 
       const tmdb = this.getTmdb();
       const hasKey = !!storage.settings.get().tmdbApiKey;
@@ -688,6 +698,11 @@ export class FolderSyncService {
       patch.platform = payload.user.platform ?? null;
     }
     if (payload?.user) this.userFieldsPatch(patch, payload);
+    const fmPoster = tmdbPathFromUrl(fm.poster);
+    const fmBackdrop = tmdbPathFromUrl(fm.backdrop);
+    if (fmPoster) patch.posterPath = fmPoster;
+    if (fmBackdrop) patch.backdropPath = fmBackdrop;
+    if (payload?.comfort) this.applyComfortFrontmatter(payload, fm, noteTs);
 
     return storage.withoutTouch(async () => {
       const stats = payload
@@ -703,6 +718,28 @@ export class FolderSyncService {
     });
   }
 
+  private applyComfortFrontmatter(
+    payload: MediaSyncPayload,
+    fm: Fm,
+    noteTs: string,
+  ): void {
+    const comfort = payload.comfort;
+    if (!comfort) return;
+    const fields = [
+      ["comfort_score", "comfortScore"],
+      ["energy_level", "energyLevel"],
+      ["attention_required", "attentionLevel"],
+    ] as const;
+    let next = comfort;
+    for (const [fmKey, key] of fields) {
+      const raw = asNumber(fm[fmKey]);
+      if (raw === null) continue;
+      const value = Math.min(10, Math.max(1, Math.round(raw)));
+      if (value !== next[key]) next = { ...next, [key]: value, updatedAt: noteTs };
+    }
+    payload.comfort = next;
+  }
+
   private userFieldsPatch(
     patch: Partial<MediaItem>,
     payload: MediaSyncPayload,
@@ -714,6 +751,8 @@ export class FolderSyncService {
     if ("droppedReason" in u) patch.droppedReason = u.droppedReason ?? null;
     if (typeof u.notes === "string") patch.notes = u.notes;
     if (Array.isArray(u.tags)) patch.tags = u.tags;
+    if (typeof u.posterPath === "string" && u.posterPath) patch.posterPath = u.posterPath;
+    if (typeof u.backdropPath === "string" && u.backdropPath) patch.backdropPath = u.backdropPath;
   }
 
   private async mergeIntoExisting(
@@ -805,10 +844,10 @@ export class FolderSyncService {
           runtime: asNumber(fm.runtime),
           country: asString(fm.country),
           language: asString(fm.language),
-          posterPath: tmdbPathFromUrl(fm.poster),
-          backdropPath: tmdbPathFromUrl(fm.backdrop),
           notePath: file.path,
           ...base,
+          posterPath: tmdbPathFromUrl(fm.poster) ?? base.posterPath ?? null,
+          backdropPath: tmdbPathFromUrl(fm.backdrop) ?? base.backdropPath ?? null,
           createdAt: noteTs,
           updatedAt: noteTs,
         });
@@ -873,6 +912,36 @@ export class FolderSyncService {
 
     await this.storage.media.update(m.id, { ...patch, updatedAt: m.updatedAt });
     return true;
+  }
+
+  private async syncPresets(
+    presetNotes: Map<string, { file: TFile; fm: Fm }>,
+    result: SyncResult,
+    opts: SyncOptions & { full: boolean },
+  ): Promise<void> {
+    const storage = this.storage;
+    let n = 0;
+    for (const [, { file, fm }] of presetNotes) {
+      try {
+        const outcome = await syncPresetNote(this.app, storage, file, fm);
+        if (outcome === "created" || outcome === "updated") result.cacheUpdates++;
+        else if (outcome === "exported") result.folderUpdates++;
+      } catch (err) {
+        console.warn(`MediaVault: preset sync failed for "${file.path}"`, err);
+      }
+      await maybeYield(++n, YIELD_EVERY);
+    }
+    if (opts.full) {
+      for (const preset of await storage.comfortPresets.findWhere((p) => !p.isBuiltIn)) {
+        if (presetNotes.has(preset.id)) continue;
+        try {
+          const { changed } = await generatePresetNote(this.app, storage, preset);
+          if (changed) result.folderUpdates++;
+        } catch (err) {
+          console.warn(`MediaVault: could not create preset note "${preset.name}"`, err);
+        }
+      }
+    }
   }
 
   private async syncLists(
@@ -949,7 +1018,7 @@ export class FolderSyncService {
       await maybeYield(++n, YIELD_EVERY);
     }
 
-    if (opts.full && opts.createMissingNotes) {
+    if (opts.full) {
       for (const list of await storage.customLists.getAll()) {
         if (listNotes.has(list.id)) continue;
         const tomb = await this.tombstoneFor("list", list.id, tombstones);

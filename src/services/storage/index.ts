@@ -146,6 +146,11 @@ export class StorageService {
     }
   }
 
+  async flushPending(): Promise<void> {
+    await this.flushTouches();
+    await this.adapter.flush();
+  }
+
   async shutdown(): Promise<void> {
     this.releasePipelineWaiters();
     await this.flushTouches();
