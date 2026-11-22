@@ -5049,7 +5049,6 @@ body:not(.is-mobile) .mediavault-comfort-flags > .setting-item:first-child {
   margin-top: 12px;
   padding: 8px 10px;
   border-radius: var(--radius-s);
-  border-left: 3px solid var(--text-warning);
   background: var(--background-secondary);
   font-size: var(--font-ui-small);
 }

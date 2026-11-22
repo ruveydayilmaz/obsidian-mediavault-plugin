@@ -8,7 +8,7 @@ import {
   serializeFrontmatter,
   type FrontmatterData,
 } from "./note-generator/frontmatter";
-import { resolveListNotePath } from "./list-note-generator";
+import { findListNoteFile, resolveListNotePath } from "./list-note-generator";
 
 export type TombstoneKind = "media" | "list";
 
@@ -98,12 +98,17 @@ export async function recordListDeletion(
   list: CustomList,
 ): Promise<void> {
   try {
-    const path = resolveListNotePath(baseFolder(storage), list);
-    const file = app.vault.getAbstractFileByPath(path);
-    if (!(file instanceof TFile)) return;
-    const fm = app.metadataCache.getFileCache(file)?.frontmatter;
-    if (fm && fm.mediavault_list_id !== list.id) return;
-    await app.fileManager.trashFile(file);
+    let file: TFile | null = findListNoteFile(app, baseFolder(storage), list.id);
+    if (!file) {
+      const byTitle = app.vault.getAbstractFileByPath(
+        resolveListNotePath(baseFolder(storage), list),
+      );
+      if (byTitle instanceof TFile) {
+        const fm = app.metadataCache.getFileCache(byTitle)?.frontmatter;
+        if (!fm || fm.mediavault_list_id === list.id) file = byTitle;
+      }
+    }
+    if (file) await app.fileManager.trashFile(file);
     await writeTombstone(app, storage, "list", list.id);
   } catch (err) {
     console.warn("MediaVault: could not record list deletion", err);

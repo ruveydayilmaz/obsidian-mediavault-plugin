@@ -95,11 +95,17 @@ interface PendingNotification {
   message: string;
 }
 
+export interface NotificationRunOptions {
+  runExclusive?: <T>(fn: () => Promise<T>) => Promise<T>;
+  signal?: { readonly aborted: boolean };
+}
+
 export async function checkMetadataUpdates(
   storage: StorageService,
   tmdb: TMDBService,
   enabled: MediaVaultSettings["notificationsEnabled"],
   baselineDate: string | null = null,
+  signal?: { readonly aborted: boolean },
 ): Promise<{
   pending: PendingNotification[];
   mediaUpdates: Map<string, Partial<MediaItem>>;
@@ -116,6 +122,7 @@ export async function checkMetadataUpdates(
   );
 
   for (const show of activeShows) {
+    if (signal?.aborted) throw new Error("notification check aborted");
     let details;
     try {
       details = await tmdb.getTV(show.tmdbId);
@@ -201,6 +208,7 @@ export async function checkMetadataUpdates(
         new Date(m.releaseDate).getTime() > Date.now(),
     );
     for (const movie of pendingMovies) {
+      if (signal?.aborted) throw new Error("notification check aborted");
       let details;
       try {
         details = await tmdb.getMovie(movie.tmdbId);
@@ -287,44 +295,54 @@ export async function runNotificationCheck(
   tmdb: TMDBService,
   settings: MediaVaultSettings,
   now: Date = new Date(),
+  options: NotificationRunOptions = {},
 ): Promise<PendingNotification[]> {
   const baselineDate = getNotificationBaselineDate(settings);
+  const exclusive =
+    options.runExclusive ?? (<T>(fn: () => Promise<T>): Promise<T> => fn());
 
   const { pending: metadataPending, mediaUpdates } = await checkMetadataUpdates(
     storage,
     tmdb,
     settings.notificationsEnabled,
     baselineDate,
+    options.signal,
   );
+  if (options.signal?.aborted) throw new Error("notification check aborted");
 
-  for (const [mediaId, patch] of mediaUpdates) {
-    await storage.media.update(mediaId, patch);
-  }
+  return exclusive(async () => {
+    for (const [mediaId, patch] of mediaUpdates) {
+      if (!(await storage.media.findById(mediaId))) continue;
+      await storage.media.update(mediaId, patch);
+    }
 
-  const allMedia = await storage.media.getAll();
-  const reminderPending = checkReminders(
-    allMedia,
-    settings.notificationsEnabled,
-    now,
-  );
+    const allMedia = await storage.media.getAll();
+    const reminderPending = checkReminders(
+      allMedia,
+      settings.notificationsEnabled,
+      now,
+    );
 
-  const toFire: PendingNotification[] = [];
-  const cooldownSince = new Date(
-    now.getTime() - REMINDER_COOLDOWN_DAYS * 24 * 60 * 60 * 1000,
-  ).toISOString();
+    const liveIds = new Set(allMedia.map((m) => m.id));
+    const toFire: PendingNotification[] = [];
+    const cooldownSince = new Date(
+      now.getTime() - REMINDER_COOLDOWN_DAYS * 24 * 60 * 60 * 1000,
+    ).toISOString();
 
-  for (const n of [...metadataPending, ...reminderPending]) {
-    const isDuplicate = RECURRING_TYPES.has(n.type)
-      ? await storage.notifications.notifiedSince(
-          n.type,
-          n.mediaId,
-          cooldownSince,
-        )
-      : await storage.notifications.alreadyNotified(n.type, n.mediaId);
-    if (isDuplicate) continue;
-    await storage.notifications.record(n.type, n.mediaId, n.title, n.message);
-    toFire.push(n);
-  }
+    for (const n of [...metadataPending, ...reminderPending]) {
+      if (!liveIds.has(n.mediaId)) continue;
+      const isDuplicate = RECURRING_TYPES.has(n.type)
+        ? await storage.notifications.notifiedSince(
+            n.type,
+            n.mediaId,
+            cooldownSince,
+          )
+        : await storage.notifications.alreadyNotified(n.type, n.mediaId);
+      if (isDuplicate) continue;
+      await storage.notifications.record(n.type, n.mediaId, n.title, n.message);
+      toFire.push(n);
+    }
 
-  return toFire;
+    return toFire;
+  });
 }
